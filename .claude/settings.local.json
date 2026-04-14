@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash([ -f ~/.config/vault-orchestrator/google_credentials ])",
+      "Bash(chmod 600 ~/.config/vault-orchestrator/google_credentials)",
+      "Bash(mkdir -p ingest process deliver cli)",
+      "Bash(mv mymemo_sync.py ingest/)",
+      "Bash(mv briefing_sync.py ingest/)"
+    ]
+  }
+}
