@@ -44,3 +44,4 @@ All secrets live in `~/.config/` as JSON files, chmod 600, never committed.
 |------|-------------|--------|
 | `ingest/mymemo_sync.py` | MyMemo AI API | Appends podcast digests to `YYYY-MM-DD.md` |
 | `ingest/briefing_sync.py` | Google Calendar + Gmail → MiniMax | Creates `YYYY-MM-DD Briefing.md` |
+| `ingest/hedy_sync.py` | Hedy AI sessions API | Appends session summaries + action items to `YYYY-MM-DD.md` |
