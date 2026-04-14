@@ -37,6 +37,7 @@ VAULT_PATH = Path(
 ).expanduser()
 LOCAL_TIMEZONE = "America/Los_Angeles"
 
+HEDY_BASE_URL = "https://api.hedy.bot"
 HEDY_SESSIONS_URL = "https://api.hedy.bot/sessions?limit=10"
 SECTION_HEADER = "## Hedy AI"
 SESSION_PREFIX = "### "
@@ -69,32 +70,55 @@ def load_credentials() -> dict:
     return creds
 
 
-def fetch_sessions(api_key: str) -> list[dict]:
-    """GET /v1/sessions — returns list of session dicts."""
+_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+
+
+def _hedy_get(api_key: str, url: str) -> dict | list:
+    """Authenticated GET to Hedy API. Returns parsed JSON."""
     req = urllib.request.Request(
-        HEDY_SESSIONS_URL,
-        method="GET",
+        url, method="GET",
         headers={
             "Authorization": f"Bearer {api_key}",
             "Accept": "application/json",
-            "User-Agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            ),
+            "User-Agent": _UA,
         },
     )
     with urllib.request.urlopen(req, timeout=20) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
+        return json.loads(resp.read().decode("utf-8"))
 
-    # Tolerate both {"sessions": [...]} and bare [...]
-    if isinstance(data, list):
-        return data
-    if isinstance(data, dict):
-        for key in ("sessions", "data", "items", "results"):
-            if isinstance(data.get(key), list):
-                return data[key]
-    raise RuntimeError(f"Unexpected response shape: {json.dumps(data)[:300]}")
+
+def fetch_session_detail(api_key: str, session_id: str) -> dict:
+    """GET /sessions/{id} — returns full session with recap, meeting_minutes, user_todos, highlights."""
+    raw = _hedy_get(api_key, f"{HEDY_BASE_URL}/sessions/{session_id}")
+    if isinstance(raw, dict):
+        return raw.get("data", raw)  # unwrap {success, data} envelope if present
+    return {}
+
+
+def fetch_sessions(api_key: str) -> list[dict]:
+    """Fetch session list then enrich each entry with full detail."""
+    raw = _hedy_get(api_key, HEDY_SESSIONS_URL)
+    summaries: list[dict] = raw if isinstance(raw, list) else next(
+        (v for v in raw.values() if isinstance(v, list)), []
+    )
+    if not summaries:
+        raise RuntimeError(f"Unexpected response shape: {json.dumps(raw)[:300]}")
+
+    detailed = []
+    for s in summaries:
+        sid = s.get("sessionId") or s.get("id")
+        if sid:
+            try:
+                detail = fetch_session_detail(api_key, sid)
+                detailed.append(detail if detail else s)
+            except Exception:
+                detailed.append(s)  # fall back to summary-only on error
+        else:
+            detailed.append(s)
+    return detailed
 
 
 def session_date(session: dict) -> str:
@@ -120,34 +144,72 @@ def apply_links(text: str) -> tuple[str, list[str]]:
     return linked, sorted(tags)
 
 
-def format_session(session: dict) -> str:
-    """Convert one session dict to a Markdown block."""
-    title = (session.get("title") or session.get("name") or "Untitled Session").strip()
-    summary = (session.get("summary") or session.get("description") or "").strip()
+def _item_text(item: object) -> str:
+    """Extract string from a Hedy list item (may be str or dict)."""
+    if isinstance(item, dict):
+        return (item.get("text") or item.get("title") or item.get("content") or "").strip()
+    return str(item).strip()
 
-    # Action items: list field, or fall back to empty
-    raw_actions = session.get("action_items") or session.get("actions") or []
-    if isinstance(raw_actions, str):
-        # Some APIs return a newline-delimited string
-        raw_actions = [a.strip() for a in raw_actions.splitlines() if a.strip()]
+
+def format_session(session: dict) -> str:
+    """Convert one Hedy session detail dict to a Markdown block."""
+    title = (session.get("title") or "Untitled Session").strip()
+    session_type = (session.get("session_type") or "").replace("_", " ")
+    duration = session.get("duration")
+    topic_name = ((session.get("topic") or {}).get("name") or "").strip()
+
+    recap = (session.get("recap") or "").strip()
+    meeting_minutes = (session.get("meeting_minutes") or "").strip()
+    user_todos = [_item_text(i) for i in (session.get("user_todos") or []) if _item_text(i)]
+    highlights = [_item_text(i) for i in (session.get("highlights") or []) if _item_text(i)]
 
     tags: set[str] = set()
     lines = [f"{SESSION_PREFIX}{title}"]
-    if summary:
-        linked_summary, summary_tags = apply_links(summary)
-        tags.update(summary_tags)
-        lines.append(f"{linked_summary}")
-    if raw_actions:
-        lines.append("")
-        lines.append("**Action items:**")
-        for item in raw_actions:
-            linked_item, item_tags = apply_links(str(item))
-            tags.update(item_tags)
-            lines.append(f"- {linked_item}")
-    if tags:
-        lines.append("")
-        lines.append(" ".join(f"#{tag}" for tag in sorted(tags)))
+
+    # Meta line: type · duration · topic
+    meta = " · ".join(p for p in [
+        session_type,
+        f"{duration} min" if duration else "",
+        topic_name,
+    ] if p)
+    if meta:
+        lines.append(f"*{meta}*")
     lines.append("")
+
+    if recap:
+        linked, found_tags = apply_links(recap)
+        tags.update(found_tags)
+        lines.append("**Recap:**")
+        lines.append(linked)
+        lines.append("")
+
+    if meeting_minutes:
+        linked, found_tags = apply_links(meeting_minutes)
+        tags.update(found_tags)
+        lines.append("**Meeting Notes:**")
+        lines.append(linked)
+        lines.append("")
+
+    if user_todos:
+        lines.append("**Action Items:**")
+        for item in user_todos:
+            linked, found_tags = apply_links(item)
+            tags.update(found_tags)
+            lines.append(f"- {linked}")
+        lines.append("")
+
+    if highlights:
+        lines.append("**Highlights:**")
+        for h in highlights:
+            linked, found_tags = apply_links(h)
+            tags.update(found_tags)
+            lines.append(f"- {linked}")
+        lines.append("")
+
+    if tags:
+        lines.append(" ".join(f"#{t}" for t in sorted(tags)))
+        lines.append("")
+
     return "\n".join(lines)
 
 
