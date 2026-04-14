@@ -176,6 +176,32 @@ def write_error_callout(note_path: Path, message: str) -> None:
     append_to_note(note_path, callout)
 
 
+def inject_success_callout(note_path: Path, count: int) -> None:
+    """Inject a success callout near the top of the note after YAML frontmatter.
+    Idempotent — skips if the marker is already present."""
+    callout_marker = "> [!success] 🎙️ **Hedy Sync:**"
+    callout = f"{callout_marker} {count} new session(s) appended below."
+
+    content = note_path.read_text(encoding="utf-8")
+    if callout_marker in content:
+        return  # already injected this run or a previous run
+
+    lines = content.splitlines(keepends=True)
+
+    # Find insertion point: right after closing `---` of YAML frontmatter, else line 0
+    insert_pos = 0
+    if lines and lines[0].rstrip() == "---":
+        for i in range(1, len(lines)):
+            if lines[i].rstrip() == "---":
+                insert_pos = i + 1
+                break
+
+    # Blank line before callout when placed after frontmatter; callout at top otherwise
+    injection = f"\n{callout}\n\n" if insert_pos > 0 else f"{callout}\n\n"
+    lines.insert(insert_pos, injection)
+    note_path.write_text("".join(lines), encoding="utf-8")
+
+
 def main() -> None:
     today = today_local()
     note_path = VAULT_PATH / f"{today}.md"
@@ -238,6 +264,9 @@ def main() -> None:
     # 6. Append
     append_to_note(note_path, output)
     print(f"[hedy_sync] Appended {len(new_sessions)} new session(s) to {note_path}")
+
+    # 7. Inject success callout near top of note
+    inject_success_callout(note_path, len(new_sessions))
 
 
 if __name__ == "__main__":
