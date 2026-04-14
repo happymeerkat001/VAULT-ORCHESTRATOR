@@ -35,7 +35,7 @@ CREDENTIALS_PATH = Path("~/.config/vault-orchestrator/google_credentials").expan
 VAULT_PATH = Path(
     "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Learning Root"
 ).expanduser()
-LOCAL_TIMEZONE = "America/Los_Angeles"
+LOCAL_TIMEZONE = "America/Chicago"
 
 HEDY_BASE_URL = "https://api.hedy.bot"
 HEDY_SESSIONS_URL = "https://api.hedy.bot/sessions?limit=10"
@@ -45,6 +45,9 @@ KEYWORD_MAP: dict[str, str] = {
     "assurance relay": "[[Assurance Relay LLC]]",
     "real estate": "[[Real Estate]]",
     "python": "[[Python]]",
+    "AI": "[[Artificial Intelligence]]",
+    "coding": "[[Coding]]",
+    "Javascript": "[[JavaScript]]",
     "obsidian": "[[Obsidian]]",
     "padsplit": "[[PadSplit]]",
 }
