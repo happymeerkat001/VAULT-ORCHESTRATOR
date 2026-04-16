@@ -38,11 +38,12 @@ except ImportError:
 
 # ── CONFIGURATION ─────────────────────────────────────────────────────────────
 CREDENTIALS_PATH = Path("~/.config/vault-orchestrator/google_credentials").expanduser()
-VAULT_DAILY_NOTES = Path(
-    "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Neural-Orchestrator/Daily Notes"
+VAULT_PATH = Path(
+    "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Neural-orchestrator"
 ).expanduser()
 LOCAL_TIMEZONE = "America/Chicago"
 MAX_EMAIL_RESULTS = 25
+BRIEFING_HEADER = "## Morning Briefing"
 # ─────────────────────────────────────────────────────────────────────────────
 
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -221,9 +222,19 @@ def generate_briefing(payload: dict, minimax_api_key: str) -> str:
 
 
 def write_briefing(date_str: str, markdown: str) -> Path:
-    out_path = VAULT_DAILY_NOTES / f"{date_str} Briefing.md"
+    out_path = VAULT_PATH / f"{date_str}.md"
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(markdown, encoding="utf-8")
+
+    if out_path.exists():
+        existing = out_path.read_text(encoding="utf-8")
+        if BRIEFING_HEADER in existing:
+            print(f"[briefing_sync] {BRIEFING_HEADER} already present in {out_path.name}, skipping.")
+            return out_path
+        with open(out_path, "a", encoding="utf-8") as f:
+            f.write(f"\n{markdown}")
+    else:
+        out_path.write_text(markdown, encoding="utf-8")
+
     return out_path
 
 
@@ -274,10 +285,10 @@ def main() -> None:
         sys.exit(1)
 
     # 5. Write to Obsidian
-    markdown = f"# {today} Briefing\n\n{ai_markdown.strip()}\n"
+    markdown = f"{BRIEFING_HEADER}\n\n{ai_markdown.strip()}\n"
     try:
         out_path = write_briefing(today, markdown)
-        print(f"[briefing_sync] Briefing written to: {out_path}")
+        print(f"[briefing_sync] wrote to: {out_path}")
     except OSError as exc:
         print(f"[ERROR] Failed to write file: {exc}", file=sys.stderr)
         sys.exit(1)
