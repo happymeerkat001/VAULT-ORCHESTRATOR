@@ -36,7 +36,7 @@ All secrets live in `~/.config/` as JSON files, chmod 600, never committed.
 
 ## Obsidian vault root
 
-`~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Learning Root/`
+`~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Neural-orchestrator/`
 
 ## Scripts
 

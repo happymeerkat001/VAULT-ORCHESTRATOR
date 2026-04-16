@@ -79,4 +79,4 @@ python3 ingest/briefing_sync.py
 
 ## Obsidian vault path
 
-`~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Learning Root/`
+`~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Neural-orchestrator/`
