@@ -39,9 +39,9 @@ except ImportError:
 # ── CONFIGURATION ─────────────────────────────────────────────────────────────
 CREDENTIALS_PATH = Path("~/.config/vault-orchestrator/google_credentials").expanduser()
 VAULT_DAILY_NOTES = Path(
-    "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Learning Root/Daily Notes"
+    "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Neural-Orchestrator/Daily Notes"
 ).expanduser()
-LOCAL_TIMEZONE = "America/Los_Angeles"
+LOCAL_TIMEZONE = "America/Chicago"
 MAX_EMAIL_RESULTS = 25
 # ─────────────────────────────────────────────────────────────────────────────
 

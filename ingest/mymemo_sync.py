@@ -33,7 +33,7 @@ except ImportError:
 # ── CONFIGURATION (edit these) ────────────────────────────────────────────────
 CREDENTIALS_PATH = Path("~/.config/mymemo/credentials").expanduser()
 VAULT_PATH = Path(
-    "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Learning Root"
+    "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Neural-Orchestrator"
 ).expanduser()
 
 # Timezone for determining "today". Find yours via: python3 -c "import zoneinfo; print(sorted(zoneinfo.available_timezones()))"
