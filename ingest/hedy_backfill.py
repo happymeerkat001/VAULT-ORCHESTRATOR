@@ -30,7 +30,7 @@ except ImportError:
 # ── CONFIGURATION ─────────────────────────────────────────────────────────────
 CREDENTIALS_PATH = Path("~/.config/vault-orchestrator/google_credentials").expanduser()
 VAULT_PATH = Path(
-    "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Learning Root"
+    "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Neural-Orchestrator"
 ).expanduser()
 LOCAL_TIMEZONE = "America/Los_Angeles"
 
