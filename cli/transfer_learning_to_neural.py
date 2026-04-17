@@ -12,10 +12,18 @@ SOURCE_ROOT = Path(
 TARGET_ROOT = Path(
     "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Neural-orchestrator"
 ).expanduser()
-KEYWORDS = ["ICS", "Justin Sung"]
+
+# Parse keywords from terminal arguments
+if len(sys.argv) > 1:
+    KEYWORDS = sys.argv[1:]
+else:
+    print("Error: You must provide at least one keyword.")
+    print("Usage: python3 cli/transfer_learning_to_neural.py <keyword1> <keyword2>")
+    sys.exit(1)
 
 
 def main() -> None:
+    print(f"Scanning for keywords: {', '.join(KEYWORDS)}...")
     files = scan_matching_files(SOURCE_ROOT, KEYWORDS)
     total = len(files)
     print(f"Found {total} matching file(s).")
