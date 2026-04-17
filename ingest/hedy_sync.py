@@ -39,6 +39,9 @@ LOCAL_TIMEZONE = "America/Chicago"
 
 HEDY_BASE_URL = "https://api.hedy.bot"
 HEDY_SESSIONS_URL = "https://api.hedy.bot/sessions?limit=10"
+HEDY_AI_PATH = Path(
+    "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Neural-Orchestrator/Hedy-AI"
+).expanduser()
 SECTION_HEADER = "## Hedy AI"
 SESSION_PREFIX = "### "
 KEYWORD_MAP: dict[str, str] = {
@@ -227,6 +230,35 @@ def get_existing_session_titles(note_path: Path) -> set[str]:
     return titles
 
 
+def write_transcript_note(sessions: list[dict], date: str) -> None:
+    """Write cleaned transcripts to Hedy-AI/transcript YYYY-MM-DD.md.
+    This is the note targeted by [[transcript YYYY-MM-DD]] links.
+    Idempotent: skips sessions whose transcript block is already present."""
+    transcript_path = HEDY_AI_PATH / f"transcript {date}.md"
+    HEDY_AI_PATH.mkdir(parents=True, exist_ok=True)
+
+    existing = transcript_path.read_text(encoding="utf-8") if transcript_path.exists() else ""
+
+    blocks: list[str] = []
+    for session in sessions:
+        title = (session.get("title") or "Untitled Session").strip()
+        marker = f"\n## {title}\n"
+        if marker in existing:
+            continue  # already written
+        text = (session.get("cleaned_transcript") or session.get("transcript") or "").strip()
+        if not text:
+            continue
+        blocks.append(f"## {title}\n\n{text}\n")
+
+    if not blocks:
+        return
+
+    header = f"# Transcript — {date}\n\n" if not existing.strip() else "\n"
+    with open(transcript_path, "a", encoding="utf-8") as f:
+        f.write(header + "\n".join(blocks))
+    print(f"[hedy_sync] Wrote {len(blocks)} transcript(s) to {transcript_path}")
+
+
 def append_to_note(note_path: Path, text: str) -> None:
     note_path.parent.mkdir(parents=True, exist_ok=True)
     with open(note_path, "a", encoding="utf-8") as f:
@@ -330,7 +362,10 @@ def main() -> None:
     append_to_note(note_path, output)
     print(f"[hedy_sync] Appended {len(new_sessions)} new session(s) to {note_path}")
 
-    # 7. Inject success callout near top of note
+    # 7. Write transcripts to Hedy-AI/YYYY-MM-DD.md
+    write_transcript_note(new_sessions, today)
+
+    # 8. Inject success callout near top of note
     inject_success_callout(note_path, len(new_sessions))
 
 
