@@ -26,36 +26,24 @@ def main() -> None:
     print(f"Scanning for keywords: {', '.join(KEYWORDS)}...")
     files = scan_matching_files(SOURCE_ROOT, KEYWORDS)
     total = len(files)
-    print(f"Found {total} matching file(s).")
+    
+    if total == 0:
+        print("No matching files found. Exiting.")
+        return
+        
+    print(f"Found {total} matching file(s). Starting automatic transfer...\n")
 
     copied = 0
-    skipped = 0
 
     for index, source_file in enumerate(files, start=1):
         relative = source_file.relative_to(SOURCE_ROOT)
-        print(f"\n[{index}/{total}] {relative}")
-
-        while True:
-            answer = input("Transfer? (y/n/q): ").strip().lower()
-            if answer in {"y", "n", "q"}:
-                break
-            print("Please enter y, n, or q.")
-
-        if answer == "q":
-            print("Stopping early.")
-            break
-        if answer == "n":
-            skipped += 1
-            print("Skipped.")
-            continue
-
+        
+        # Copy the file immediately without asking
         destination = copy_file(source_file, SOURCE_ROOT, TARGET_ROOT)
         copied += 1
-        print(f"Copied to {destination}")
+        print(f"[{index}/{total}] Copied: {relative}")
 
-    # Count unprocessed files as skipped if user quits early.
-    skipped += total - copied - skipped
-    print(f"\nSummary: {copied} copied, {skipped} skipped.")
+    print(f"\nSummary: {copied} file(s) successfully copied to Neural-orchestrator.")
 
 
 if __name__ == "__main__":
