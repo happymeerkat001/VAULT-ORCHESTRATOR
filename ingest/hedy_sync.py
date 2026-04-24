@@ -26,6 +26,30 @@ from datetime import datetime
 from pathlib import Path
 
 try:
+    from ingest.hedy_common import (
+        append_to_note,
+        build_sessions_output,
+        ensure_daily_note_link,
+        ensure_transcript_link,
+        get_existing_session_titles,
+        hedy_note_path,
+        transcript_note_path,
+        write_transcript_note,
+    )
+except ModuleNotFoundError:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from ingest.hedy_common import (
+        append_to_note,
+        build_sessions_output,
+        ensure_daily_note_link,
+        ensure_transcript_link,
+        get_existing_session_titles,
+        hedy_note_path,
+        transcript_note_path,
+        write_transcript_note,
+    )
+
+try:
     from zoneinfo import ZoneInfo
     _HAS_ZONEINFO = True
 except ImportError:
@@ -34,29 +58,10 @@ except ImportError:
 # ── CONFIGURATION ─────────────────────────────────────────────────────────────
 CREDENTIALS_PATH = Path("~/.config/vault-orchestrator/google_credentials").expanduser()
 ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
-VAULT_PATH = Path(
-    "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Neural-Orchestrator"
-).expanduser()
-DAILY_NOTES_PATH = VAULT_PATH / "Daily Notes"
 LOCAL_TIMEZONE = "America/Chicago"
 
 HEDY_BASE_URL = "https://api.hedy.bot"
 HEDY_SESSIONS_URL = "https://api.hedy.bot/sessions?limit=10"
-HEDY_AI_PATH = Path(
-    "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Neural-Orchestrator/Hedy-AI"
-).expanduser()
-SECTION_HEADER = "## Hedy AI"
-SESSION_PREFIX = "### "
-KEYWORD_MAP: dict[str, str] = {
-    "assurance relay": "[[Assurance Relay LLC]]",
-    "real estate": "[[Real Estate]]",
-    "python": "[[Python]]",
-    "AI": "[[Artificial Intelligence]]",
-    "coding": "[[Coding]]",
-    "Javascript": "[[JavaScript]]",
-    "obsidian": "[[Obsidian]]",
-    "padsplit": "[[PadSplit]]",
-}
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -142,144 +147,6 @@ def session_date(session: dict) -> str:
     return ""
 
 
-def apply_links(text: str) -> tuple[str, list[str]]:
-    linked = text
-    tags: set[str] = set()
-
-    for key in sorted(KEYWORD_MAP, key=len, reverse=True):
-        pattern = re.compile(rf"(?i)\b{re.escape(key)}\b")
-        mapped_value = KEYWORD_MAP[key]
-        linked, count = pattern.subn(mapped_value, linked)
-        if count:
-            tags.add(key.lower().replace(" ", "-"))
-
-    return linked, sorted(tags)
-
-
-def _item_text(item: object) -> str:
-    """Extract string from a Hedy list item (may be str or dict)."""
-    if isinstance(item, dict):
-        return (item.get("text") or item.get("title") or item.get("content") or "").strip()
-    return str(item).strip()
-
-
-def format_session(session: dict) -> str:
-    """Convert one Hedy session detail dict to a Markdown block."""
-    title = (session.get("title") or "Untitled Session").strip()
-    session_type = (session.get("session_type") or "").replace("_", " ")
-    duration = session.get("duration")
-    topic_name = ((session.get("topic") or {}).get("name") or "").strip()
-
-    recap = (session.get("recap") or "").strip()
-    meeting_minutes = (session.get("meeting_minutes") or "").strip()
-    user_todos = [_item_text(i) for i in (session.get("user_todos") or []) if _item_text(i)]
-    highlights = [_item_text(i) for i in (session.get("highlights") or []) if _item_text(i)]
-
-    tags: set[str] = set()
-    lines = [f"{SESSION_PREFIX}{title}"]
-
-    # Meta line: type · duration · topic
-    meta = " · ".join(p for p in [
-        session_type,
-        f"{duration} min" if duration else "",
-        topic_name,
-    ] if p)
-    if meta:
-        lines.append(f"*{meta}*")
-    lines.append("")
-
-    if recap:
-        linked, found_tags = apply_links(recap)
-        tags.update(found_tags)
-        lines.append("**Recap:**")
-        lines.append(linked)
-        lines.append("")
-
-    if meeting_minutes:
-        linked, found_tags = apply_links(meeting_minutes)
-        tags.update(found_tags)
-        lines.append("**Meeting Notes:**")
-        lines.append(linked)
-        lines.append("")
-
-    if user_todos:
-        lines.append("**Action Items:**")
-        for item in user_todos:
-            linked, found_tags = apply_links(item)
-            tags.update(found_tags)
-            lines.append(f"- {linked}")
-        lines.append("")
-
-    if highlights:
-        lines.append("**Highlights:**")
-        for h in highlights:
-            linked, found_tags = apply_links(h)
-            tags.update(found_tags)
-            lines.append(f"- {linked}")
-        lines.append("")
-
-    if tags:
-        lines.append(" ".join(f"#{t}" for t in sorted(tags)))
-        lines.append("")
-
-    return "\n".join(lines)
-
-
-def get_existing_session_titles(note_path: Path) -> set[str]:
-    """Return set of session titles already written (idempotency guard)."""
-    if not note_path.exists():
-        return set()
-    titles: set[str] = set()
-    for line in note_path.read_text(encoding="utf-8").splitlines():
-        if line.startswith(SESSION_PREFIX):
-            titles.add(line[len(SESSION_PREFIX):].strip())
-    return titles
-
-
-def write_transcript_note(sessions: list[dict], date: str) -> bool:
-    """Write cleaned transcripts to Hedy-AI/transcript YYYY-MM-DD.md.
-    This is the note targeted by [[transcript YYYY-MM-DD]] links.
-    Idempotent: skips sessions whose transcript block is already present."""
-    transcript_path = HEDY_AI_PATH / f"transcript {date}.md"
-    HEDY_AI_PATH.mkdir(parents=True, exist_ok=True)
-
-    existing = transcript_path.read_text(encoding="utf-8") if transcript_path.exists() else ""
-
-    blocks: list[str] = []
-    for session in sessions:
-        title = (session.get("title") or "Untitled Session").strip()
-        marker = f"\n## {title}\n"
-        if marker in existing:
-            continue  # already written
-        text = (session.get("cleaned_transcript") or session.get("transcript") or "").strip()
-        if not text:
-            continue
-        blocks.append(f"## {title}\n\n{text}\n")
-
-    if not blocks:
-        return False
-
-    header = f"# Transcript — {date}\n\n" if not existing.strip() else "\n"
-    with open(transcript_path, "a", encoding="utf-8") as f:
-        f.write(header + "\n".join(blocks))
-    print(f"[hedy_sync] Wrote {len(blocks)} transcript(s) to {transcript_path}")
-    return True
-
-
-def ensure_transcript_link(note_path: Path, date: str) -> None:
-    link = f"[[transcript {date}]]"
-    existing = note_path.read_text(encoding="utf-8") if note_path.exists() else ""
-    if link in existing:
-        return
-    append_to_note(note_path, f"\n{link}\n")
-
-
-def append_to_note(note_path: Path, text: str) -> None:
-    note_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(note_path, "a", encoding="utf-8") as f:
-        f.write(text)
-
-
 def write_error_callout(note_path: Path, message: str) -> None:
     callout = (
         f"\n> [!ERROR] Hedy Sync Failed: {message}. "
@@ -316,7 +183,7 @@ def inject_success_callout(note_path: Path, count: int) -> None:
 
 def main() -> None:
     today = today_local()
-    note_path = DAILY_NOTES_PATH / f"{today}.md"
+    note_path = hedy_note_path(today)
     print(f"[hedy_sync] date={today}  note={note_path}")
 
     # 1. Load credentials
@@ -349,6 +216,8 @@ def main() -> None:
         print(f"[hedy_sync] No Hedy sessions for {today}. Nothing to append.")
         return
 
+    ensure_daily_note_link(today)
+
     # 4. Idempotency — skip sessions already written
     existing_titles = get_existing_session_titles(note_path)
     new_sessions = [
@@ -358,28 +227,24 @@ def main() -> None:
     ]
 
     if not new_sessions:
+        wrote_transcript = write_transcript_note(todays, today)
+        if wrote_transcript or transcript_note_path(today).exists():
+            ensure_transcript_link(note_path, today)
         print(f"[hedy_sync] All {len(todays)} session(s) already present. Nothing to do.")
         return
 
     # 5. Build output block
-    has_section = (
-        note_path.exists()
-        and SECTION_HEADER in note_path.read_text(encoding="utf-8")
-    )
-    output = ""
-    if not has_section:
-        output += f"\n{SECTION_HEADER} — {today}\n\n"
-
-    for session in new_sessions:
-        output += format_session(session)
+    output = build_sessions_output(note_path, new_sessions, today)
 
     # 6. Append
-    append_to_note(note_path, output)
+    note_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(note_path, "a", encoding="utf-8") as f:
+        f.write(output)
     print(f"[hedy_sync] Appended {len(new_sessions)} new session(s) to {note_path}")
 
     # 7. Write transcripts to Hedy-AI/YYYY-MM-DD.md
-    wrote_transcript = write_transcript_note(new_sessions, today)
-    if wrote_transcript:
+    wrote_transcript = write_transcript_note(todays, today)
+    if wrote_transcript or transcript_note_path(today).exists():
         ensure_transcript_link(note_path, today)
 
     # 8. Inject success callout near top of note
