@@ -4,8 +4,8 @@ hedy_backfill.py — Fetches historical Hedy AI sessions and appends them to
 date-matched Obsidian daily notes as structured Markdown.
 
 One-time setup:
-  Ensure ~/.config/vault-orchestrator/google_credentials contains:
-    { "hedy_api_key": "<your_key>", ... }
+  Add HEDY_AI_API_KEY to /Users/leon/Documents/Code/vault-orchestrator/.env
+  or set hedy_api_key in ~/.config/vault-orchestrator/google_credentials
 
 Manual run:
   python3 /Users/leon/Documents/Code/vault-orchestrator/ingest/hedy_backfill.py
@@ -29,6 +29,7 @@ except ImportError:
 
 # ── CONFIGURATION ─────────────────────────────────────────────────────────────
 CREDENTIALS_PATH = Path("~/.config/vault-orchestrator/google_credentials").expanduser()
+ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 VAULT_PATH = Path(
     "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Neural-Orchestrator"
 ).expanduser()
@@ -54,17 +55,20 @@ def today_local() -> str:
     return datetime.now().strftime("%Y-%m-%d")
 
 
-def load_credentials() -> dict:
-    if not CREDENTIALS_PATH.exists():
-        raise FileNotFoundError(
-            f"Credentials not found: {CREDENTIALS_PATH}\n"
-            'Add {"hedy_api_key": "<key>"} to that file.'
-        )
-    with open(CREDENTIALS_PATH, encoding="utf-8") as f:
-        creds = json.load(f)
-    if not creds.get("hedy_api_key"):
-        raise ValueError(f"Missing 'hedy_api_key' in {CREDENTIALS_PATH}")
-    return creds
+def load_hedy_api_key() -> str:
+    if ENV_PATH.exists():
+        for line in ENV_PATH.read_text(encoding="utf-8").splitlines():
+            match = re.match(r'^\s*HEDY_AI_API_KEY\s*=\s*"?([^"]+)"?\s*$', line)
+            if match:
+                return match.group(1)
+
+    if CREDENTIALS_PATH.exists():
+        with open(CREDENTIALS_PATH, encoding="utf-8") as f:
+            creds = json.load(f)
+        if creds.get("hedy_api_key"):
+            return creds["hedy_api_key"]
+
+    raise ValueError("No Hedy API key found in .env or google_credentials")
 
 
 _UA = (
@@ -240,15 +244,15 @@ def main() -> None:
 
     # 1. Load credentials
     try:
-        creds = load_credentials()
-    except (FileNotFoundError, json.JSONDecodeError, ValueError) as exc:
+        api_key = load_hedy_api_key()
+    except (json.JSONDecodeError, ValueError) as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)
         write_error_callout(error_note_path, str(exc))
         sys.exit(1)
 
     # 2. Fetch sessions
     try:
-        all_sessions = fetch_sessions(creds["hedy_api_key"])
+        all_sessions = fetch_sessions(api_key)
     except urllib.error.HTTPError as exc:
         msg = f"HTTP {exc.code} from Hedy API"
         print(f"[ERROR] {msg}", file=sys.stderr)
