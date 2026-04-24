@@ -11,6 +11,7 @@ Manual run:
   python3 /Users/leon/Documents/Code/vault-orchestrator/ingest/hedy_sync.py
 
 Crontab (11:45 PM daily):
+  mkdir -p /Users/leon/Library/Logs
   45 23 * * * /usr/bin/python3 /Users/leon/Documents/Code/vault-orchestrator/ingest/hedy_sync.py >> /Users/leon/Library/Logs/hedy_sync.log 2>&1
 
 No external dependencies — stdlib only.
@@ -36,6 +37,7 @@ ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 VAULT_PATH = Path(
     "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Neural-Orchestrator"
 ).expanduser()
+DAILY_NOTES_PATH = VAULT_PATH / "Daily Notes"
 LOCAL_TIMEZONE = "America/Chicago"
 
 HEDY_BASE_URL = "https://api.hedy.bot"
@@ -234,7 +236,7 @@ def get_existing_session_titles(note_path: Path) -> set[str]:
     return titles
 
 
-def write_transcript_note(sessions: list[dict], date: str) -> None:
+def write_transcript_note(sessions: list[dict], date: str) -> bool:
     """Write cleaned transcripts to Hedy-AI/transcript YYYY-MM-DD.md.
     This is the note targeted by [[transcript YYYY-MM-DD]] links.
     Idempotent: skips sessions whose transcript block is already present."""
@@ -255,12 +257,21 @@ def write_transcript_note(sessions: list[dict], date: str) -> None:
         blocks.append(f"## {title}\n\n{text}\n")
 
     if not blocks:
-        return
+        return False
 
     header = f"# Transcript — {date}\n\n" if not existing.strip() else "\n"
     with open(transcript_path, "a", encoding="utf-8") as f:
         f.write(header + "\n".join(blocks))
     print(f"[hedy_sync] Wrote {len(blocks)} transcript(s) to {transcript_path}")
+    return True
+
+
+def ensure_transcript_link(note_path: Path, date: str) -> None:
+    link = f"[[transcript {date}]]"
+    existing = note_path.read_text(encoding="utf-8") if note_path.exists() else ""
+    if link in existing:
+        return
+    append_to_note(note_path, f"\n{link}\n")
 
 
 def append_to_note(note_path: Path, text: str) -> None:
@@ -305,7 +316,7 @@ def inject_success_callout(note_path: Path, count: int) -> None:
 
 def main() -> None:
     today = today_local()
-    note_path = VAULT_PATH / f"{today}.md"
+    note_path = DAILY_NOTES_PATH / f"{today}.md"
     print(f"[hedy_sync] date={today}  note={note_path}")
 
     # 1. Load credentials
@@ -367,7 +378,9 @@ def main() -> None:
     print(f"[hedy_sync] Appended {len(new_sessions)} new session(s) to {note_path}")
 
     # 7. Write transcripts to Hedy-AI/YYYY-MM-DD.md
-    write_transcript_note(new_sessions, today)
+    wrote_transcript = write_transcript_note(new_sessions, today)
+    if wrote_transcript:
+        ensure_transcript_link(note_path, today)
 
     # 8. Inject success callout near top of note
     inject_success_callout(note_path, len(new_sessions))
