@@ -23,6 +23,7 @@ No external dependencies — stdlib only.
 """
 
 import json
+import re
 import sys
 import urllib.request
 import urllib.error
@@ -41,9 +42,10 @@ CREDENTIALS_PATH = Path("~/.config/vault-orchestrator/google_credentials").expan
 VAULT_PATH = Path(
     "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Neural-orchestrator"
 ).expanduser()
+DAILY_NOTES_PATH = VAULT_PATH / "Daily Notes"
 LOCAL_TIMEZONE = "America/Chicago"
-MAX_EMAIL_RESULTS = 25
-BRIEFING_HEADER = "## Morning Briefing"
+MAX_STARRED_EMAILS = 10
+BRIEFING_HEADER = "## Morning Briefing ☀️"
 # ─────────────────────────────────────────────────────────────────────────────
 
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -51,22 +53,28 @@ GOOGLE_CALENDAR_URL = "https://www.googleapis.com/calendar/v3/calendars/primary/
 GOOGLE_GMAIL_LIST_URL = "https://www.googleapis.com/gmail/v1/users/me/messages"
 MINIMAX_URL = "https://api.minimaxi.chat/v1/chat/completions"
 
-KEYWORD_FLAGS = [
-    "PadSplit", "tenant", "rent", "mortgage", "property",
-    "church", "dissertation", "deal", "flip",
-]
-
 EMAIL_SYSTEM_PROMPT = (
     "You are preparing a concise daily briefing in markdown for the user. "
-    "Review inputs and prioritize actions. Do not mention Slack anywhere."
+    "Output ONLY the content for two sections. Do not mention Slack anywhere. "
+    "Do not wrap output in code fences. Do not include a title or date header.\n\n"
+    "Section 1: '# To-Think 🧠' — reflections, learning items, ideas to ponder. "
+    "Each item is a markdown checkbox: '- [ ] item'.\n\n"
+    "Section 2: '## To-Do ✅' — actionable tasks derived from calendar and emails. "
+    "Each item is a markdown checkbox: '- [ ] item'.\n\n"
+    "After To-Do, add '## Calendar 📅' listing events as bullets (not checkboxes) "
+    "with times in 12-hour format. The 'calendarDays' field tells you how many days "
+    "of events are included. Group events by date with a bold date label "
+    "(e.g. **Sunday 04/26**, **Monday 04/27**) when calendarDays > 1.\n\n"
+    "Then add '## Email Highlights 📧' with a one-line summary header "
+    "'**Starred:** N emails' followed by checklist items for each starred email.\n\n"
+    "If 'rolloverFromYesterday' is present, include those unchecked items "
+    "in the appropriate section (To-Think or To-Do) — do not drop them.\n\n"
+    "Keep it concise. No prose paragraphs. Checkboxes only."
 )
 
 EMAIL_USER_PROMPT_LINES = [
-    "Review the data below.",
-    "Flag emails containing any of these keywords: "
-    + ", ".join(KEYWORD_FLAGS) + ".",
-    "Infer the Top 3 priorities for \"Today's Focus\".",
-    "Output markdown only.",
+    "Review the data below and produce the briefing sections.",
+    "Output markdown only — no code fences, no extra headers.",
     "",
     "Raw JSON Data:",
 ]
@@ -78,18 +86,30 @@ def today_local() -> str:
     return datetime.now().strftime("%Y-%m-%d")
 
 
-def get_today_bounds() -> tuple[str, str]:
-    """Return ISO8601 start/end of today in UTC."""
+def get_calendar_bounds() -> tuple[str, str, int]:
+    """Return ISO8601 start/end for calendar window and number of days.
+
+    Sunday: 7 days, Wednesday: 4 days, all other days: 2 days (today + tomorrow).
+    """
     if _HAS_ZONEINFO:
         tz = ZoneInfo(LOCAL_TIMEZONE)
         now = datetime.now(tz=tz)
     else:
         now = datetime.now()
 
-    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    end = now.replace(hour=23, minute=59, second=59, microsecond=999000)
+    weekday = now.weekday()  # 0=Mon … 6=Sun
+    if weekday == 6:      # Sunday
+        lookahead = 7
+    elif weekday == 2:    # Wednesday
+        lookahead = 4
+    else:
+        lookahead = 2
 
-    # Convert to UTC ISO8601
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    end = (start + timedelta(days=lookahead)).replace(
+        hour=23, minute=59, second=59, microsecond=999000
+    ) - timedelta(days=1)
+
     if _HAS_ZONEINFO:
         start_utc = start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         end_utc = end.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -97,7 +117,7 @@ def get_today_bounds() -> tuple[str, str]:
         start_utc = start.strftime("%Y-%m-%dT%H:%M:%SZ")
         end_utc = end.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    return start_utc, end_utc
+    return start_utc, end_utc, lookahead
 
 
 def load_credentials() -> dict:
@@ -152,21 +172,21 @@ def _get_json(url: str, access_token: str) -> dict:
         return json.loads(resp.read().decode("utf-8"))
 
 
-def fetch_calendar_events(access_token: str) -> dict:
-    start, end = get_today_bounds()
+def fetch_calendar_events(access_token: str) -> tuple[dict, int]:
+    start, end, lookahead = get_calendar_bounds()
     params = urllib.parse.urlencode({
         "timeMin": start,
         "timeMax": end,
         "singleEvents": "true",
         "orderBy": "startTime",
     })
-    return _get_json(f"{GOOGLE_CALENDAR_URL}?{params}", access_token)
+    return _get_json(f"{GOOGLE_CALENDAR_URL}?{params}", access_token), lookahead
 
 
-def fetch_unread_emails(access_token: str) -> dict:
+def fetch_starred_emails(access_token: str) -> dict:
     params = urllib.parse.urlencode({
-        "q": "is:unread newer_than:1d",
-        "maxResults": MAX_EMAIL_RESULTS,
+        "q": "is:starred",
+        "maxResults": MAX_STARRED_EMAILS,
     })
     list_data = _get_json(f"{GOOGLE_GMAIL_LIST_URL}?{params}", access_token)
     messages = list_data.get("messages") or []
@@ -218,11 +238,31 @@ def generate_briefing(payload: dict, minimax_api_key: str) -> str:
     content = (data.get("choices") or [{}])[0].get("message", {}).get("content")
     if not content:
         raise RuntimeError(f"MiniMax returned no content: {data}")
+    # Strip <think>...</think> reasoning blocks leaked by the model
+    content = re.sub(r"<think>.*?</think>\s*", "", content, flags=re.DOTALL)
     return content
 
 
+def get_yesterday_unchecked(date_str: str) -> list[str]:
+    """Extract unchecked items from yesterday's daily note."""
+    if _HAS_ZONEINFO:
+        tz = ZoneInfo(LOCAL_TIMEZONE)
+        today = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=tz)
+    else:
+        today = datetime.strptime(date_str, "%Y-%m-%d")
+    yesterday = (today - timedelta(days=1)).strftime("%Y-%m-%d")
+    yesterday_path = DAILY_NOTES_PATH / f"{yesterday}.md"
+
+    if not yesterday_path.exists():
+        return []
+
+    content = yesterday_path.read_text(encoding="utf-8")
+    unchecked = re.findall(r"^- \[ \] .+$", content, re.MULTILINE)
+    return unchecked
+
+
 def write_briefing(date_str: str, markdown: str) -> Path:
-    out_path = VAULT_PATH / f"{date_str}.md"
+    out_path = DAILY_NOTES_PATH / f"{date_str}.md"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     if out_path.exists():
@@ -258,25 +298,33 @@ def main() -> None:
 
     # 3. Fetch data in sequence (stdlib has no async — keep it simple)
     try:
-        calendar_data = fetch_calendar_events(access_token)
-        print(f"[briefing_sync] calendar: {len(calendar_data.get('items') or [])} event(s)")
+        calendar_data, lookahead = fetch_calendar_events(access_token)
+        print(f"[briefing_sync] calendar: {len(calendar_data.get('items') or [])} event(s) ({lookahead} day window)")
     except Exception as exc:
         print(f"[ERROR] Calendar fetch failed: {exc}", file=sys.stderr)
         sys.exit(1)
 
     try:
-        email_data = fetch_unread_emails(access_token)
-        print(f"[briefing_sync] emails: {len(email_data.get('messages') or [])} unread")
+        email_data = fetch_starred_emails(access_token)
+        print(f"[briefing_sync] starred emails: {len(email_data.get('messages') or [])}")
     except Exception as exc:
         print(f"[ERROR] Gmail fetch failed: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    # 4. Generate briefing
+    # 4. Gather rollover items from yesterday
+    rollover = get_yesterday_unchecked(today)
+    if rollover:
+        print(f"[briefing_sync] rollover: {len(rollover)} unchecked item(s) from yesterday")
+
+    # 5. Generate briefing
     payload = {
         "date": today,
+        "calendarDays": lookahead,
         "calendar": calendar_data,
-        "unreadEmailsLast24Hours": email_data,
+        "starredEmails": email_data,
     }
+    if rollover:
+        payload["rolloverFromYesterday"] = rollover
 
     try:
         ai_markdown = generate_briefing(payload, creds["minimax_api_key"])
@@ -284,7 +332,7 @@ def main() -> None:
         print(f"[ERROR] MiniMax generation failed: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    # 5. Write to Obsidian
+    # 6. Write to Obsidian Daily Notes
     markdown = f"{BRIEFING_HEADER}\n\n{ai_markdown.strip()}\n"
     try:
         out_path = write_briefing(today, markdown)

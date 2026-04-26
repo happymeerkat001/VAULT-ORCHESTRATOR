@@ -22,24 +22,12 @@ cli/        Manual trigger scripts for one-shot runs.
 
 | Script | Source | Destination |
 |--------|--------|-------------|
-| `ingest/mymemo_sync.py` | MyMemo AI API | Appends podcast digest to `Daily Notes/YYYY-MM-DD.md` |
+| `ingest/youtube_sync.py` | YouTube watch + captions endpoints | Appends transcript + summary to `Daily Notes/YYYY-MM-DD.md` |
 | `ingest/briefing_sync.py` | Google Calendar + Gmail → MiniMax AI | Creates `Daily Notes/YYYY-MM-DD Briefing.md` |
 
 ## Setup
 
-### 1. MyMemo credentials
-
-```sh
-mkdir -p ~/.config/mymemo
-cat > ~/.config/mymemo/credentials << 'EOF'
-{"m_authorization": "<JWT>", "auth0_cookie": "<cookie>"}
-EOF
-chmod 600 ~/.config/mymemo/credentials
-```
-
-Capture `m_authorization` from DevTools → Network tab → any `/api/*` request → Headers.
-
-### 2. Google + MiniMax credentials
+### 1. Google + MiniMax credentials
 
 ```sh
 mkdir -p ~/.config/vault-orchestrator
@@ -55,7 +43,7 @@ EOF
 chmod 600 ~/.config/vault-orchestrator/google_credentials
 ```
 
-### 3. Crontab
+### 2. Crontab
 
 ```sh
 crontab -e
@@ -66,14 +54,14 @@ Add:
 # Daily briefing — 6 AM
 0 6 * * * /usr/bin/python3 /Users/leon/Documents/Code/vault-orchestrator/ingest/briefing_sync.py >> /Users/leon/Library/Logs/briefing_sync.log 2>&1
 
-# MyMemo digest — 11:50 PM
-50 23 * * * /usr/bin/python3 /Users/leon/Documents/Code/vault-orchestrator/ingest/mymemo_sync.py >> /Users/leon/Library/Logs/mymemo_sync.log 2>&1
+# YouTube transcript pull — 11:50 PM (replace URL)
+50 23 * * * /usr/bin/python3 /Users/leon/Documents/Code/vault-orchestrator/ingest/youtube_sync.py --url "https://www.youtube.com/watch?v=VIDEO_ID" >> /Users/leon/Library/Logs/youtube_sync.log 2>&1
 ```
 
 ## Running manually
 
 ```sh
-python3 ingest/mymemo_sync.py
+python3 ingest/youtube_sync.py --url "https://www.youtube.com/watch?v=VIDEO_ID"
 python3 ingest/briefing_sync.py
 ```
 

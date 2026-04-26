@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>YouTube Scraper</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 12px;
+      width: 360px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+    }
+    button {
+      width: 100%;
+      border: 0;
+      border-radius: 8px;
+      padding: 10px 12px;
+      cursor: pointer;
+      background: #22c55e;
+      color: #052e16;
+      font-weight: 700;
+    }
+    pre {
+      margin-top: 10px;
+      max-height: 360px;
+      overflow: auto;
+      white-space: pre-wrap;
+      background: #0b1220;
+      border: 1px solid #1e293b;
+      border-radius: 8px;
+      padding: 10px;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    .status {
+      margin-top: 8px;
+      font-size: 12px;
+      color: #93c5fd;
+    }
+    .error {
+      color: #fca5a5;
+    }
+  </style>
+</head>
+<body>
+  <button id="scrapeBtn">Scrape Current Video</button>
+  <div id="status" class="status"></div>
+  <pre id="output">{}</pre>
+  <script src="popup.js"></script>
+</body>
+</html>
