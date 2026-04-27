@@ -67,7 +67,8 @@ EMAIL_SYSTEM_PROMPT = (
     "of events are included. Group events by date with a bold date label "
     "(e.g. **Sunday 04/26**, **Monday 04/27**) when calendarDays > 1.\n\n"
     "Then add '## Email Highlights 📧' with a one-line summary header "
-    "'**Starred:** N emails' followed by checklist items for each starred email.\n\n"
+    "'**Starred:** N emails' followed by checklist items. List ONLY the emails "
+    "present in the data — do not add any extras.\n\n"
     "If 'rolloverFromYesterday' is present, include those unchecked items "
     "in the appropriate section (To-Think or To-Do) — do not drop them.\n\n"
     "Keep it concise. No prose paragraphs. Checkboxes only."
@@ -267,7 +268,7 @@ def fetch_starred_emails(access_token: str) -> dict:
         detailed.append(msg_data)
 
     return {
-        "resultSizeEstimate": list_data.get("resultSizeEstimate"),
+        "resultSizeEstimate": len(detailed),
         "messages": detailed,
     }
 
