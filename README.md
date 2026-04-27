@@ -22,7 +22,6 @@ cli/        Manual trigger scripts for one-shot runs.
 
 | Script | Source | Destination |
 |--------|--------|-------------|
-| `ingest/youtube_sync.py` | YouTube watch + captions endpoints | Appends transcript + summary to `Daily Notes/YYYY-MM-DD.md` |
 | `ingest/briefing_sync.py` | Google Calendar + Gmail → MiniMax AI | Creates or updates `Daily Notes/YYYY-MM-DD.md` |
 
 ## Setup
@@ -54,14 +53,6 @@ Add:
 # Daily briefing — 6:05 AM
 5 6 * * * /usr/bin/python3 /Users/leon/Documents/Code/vault-orchestrator/ingest/briefing_sync.py >> /Users/leon/Library/Logs/briefing_sync.log 2>&1
 
-# YouTube transcript pull — 11:50 PM (replace URL)
-50 23 * * * /usr/bin/python3 /Users/leon/Documents/Code/vault-orchestrator/ingest/youtube_sync.py --url "https://www.youtube.com/watch?v=VIDEO_ID" >> /Users/leon/Library/Logs/youtube_sync.log 2>&1
-```
-
-## Running manually
-
-```sh
-python3 ingest/youtube_sync.py --url "https://www.youtube.com/watch?v=VIDEO_ID"
 python3 ingest/briefing_sync.py
 ```
 
