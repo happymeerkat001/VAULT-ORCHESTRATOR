@@ -6,6 +6,9 @@ Manual run:
   python3 /Users/leon/Documents/Code/vault-orchestrator/cli/transcribe.py \
     "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
+Auth test:
+  python3 /Users/leon/Documents/Code/vault-orchestrator/cli/transcribe.py --test-auth
+
 Optional env vars in .env:
   TRANSCRIPT_LOL_SPACE_ID
   TRANSCRIPT_LOL_API_KEY
@@ -20,6 +23,7 @@ No external dependencies - stdlib only.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import re
 import sys
@@ -34,7 +38,12 @@ ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 
 BASE_URL = "https://transcript.lol"
 API_BASE_URL = f"{BASE_URL}/api/v1"
-DEFAULT_SPACE_ID = "69c31598e83d93ed1074a9e8"
+FIREBASE_API_KEY = "AIzaSyDxjpKLbNozOTGsH43wXvP2gYiYstCar3Y"
+FIREBASE_SIGN_IN_URL = (
+    "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword"
+    f"?key={FIREBASE_API_KEY}"
+)
+DEFAULT_SPACE_ID = "678568d76d74d77ee0ef382c"
 DEFAULT_TIMEOUT_SECONDS = 600
 POLL_INTERVAL_SECONDS = 5
 
@@ -78,6 +87,7 @@ class TranscriptClient:
         self.cookie_jar = CookieJar()
         self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.cookie_jar))
         self.auth_headers: dict[str, str] = {}
+        self.firebase_tokens: dict[str, str] = {}
 
     def _request(
         self,
@@ -151,8 +161,8 @@ class TranscriptClient:
                 "Transcript.lol_Login + Transcript.lol_Password."
             )
 
-        self._login_with_credentials(email, password)
-        self._verify_auth("email/password login")
+        self._login_with_firebase(email, password)
+        self._establish_transcript_auth()
 
     def _verify_auth(self, auth_mode: str) -> None:
         for candidate in (
@@ -169,81 +179,108 @@ class TranscriptClient:
                 raise RuntimeError(f"Auth probe failed at {candidate}: HTTP {status}: {text[:300]}")
         raise RuntimeError(f"Unable to verify Transcript.lol auth via {auth_mode}.")
 
-    def _login_with_credentials(self, email: str, password: str) -> None:
-        attempts = [
-            {
-                "url": f"{BASE_URL}/auth/login",
-                "payload": {"email": email, "password": password},
-                "content_type": "application/json",
+    def _login_with_firebase(self, email: str, password: str) -> None:
+        data = self._json_request(
+            FIREBASE_SIGN_IN_URL,
+            method="POST",
+            payload={
+                "email": email,
+                "password": password,
+                "returnSecureToken": True,
             },
-            {
-                "url": f"{BASE_URL}/auth/login",
-                "payload": {"email": email, "password": password},
-                "content_type": "application/x-www-form-urlencoded",
-            },
-            {
-                "url": f"{BASE_URL}/api/auth/login",
-                "payload": {"email": email, "password": password},
-                "content_type": "application/json",
-            },
-            {
-                "url": f"{BASE_URL}/api/v1/auth/login",
-                "payload": {"email": email, "password": password},
-                "content_type": "application/json",
-            },
+        )
+        if not isinstance(data, dict):
+            raise RuntimeError(f"Unexpected Firebase auth response: {json.dumps(data)[:500]}")
+
+        id_token = data.get("idToken")
+        refresh_token = data.get("refreshToken")
+        if not id_token or not refresh_token:
+            raise RuntimeError(f"Firebase auth response missing tokens: {json.dumps(data)[:500]}")
+
+        self.firebase_tokens = {
+            "idToken": str(id_token),
+            "refreshToken": str(refresh_token),
+        }
+        print("[transcribe] Firebase sign-in succeeded")
+
+    def _establish_transcript_auth(self) -> None:
+        id_token = self.firebase_tokens["idToken"]
+        refresh_token = self.firebase_tokens["refreshToken"]
+
+        exchange_attempts = [
+            (
+                f"{BASE_URL}/api/auth/session",
+                {"id_token": id_token, "refresh_token": refresh_token},
+            ),
+            (
+                f"{BASE_URL}/api/auth/firebase",
+                {"idToken": id_token, "refreshToken": refresh_token},
+            ),
+            (
+                f"{BASE_URL}/auth/session",
+                {"id_token": id_token, "refresh_token": refresh_token},
+            ),
+            (
+                f"{BASE_URL}/api/v1/auth/session",
+                {"id_token": id_token, "refresh_token": refresh_token},
+            ),
         ]
 
-        for attempt in attempts:
-            payload = attempt["payload"]
-            if attempt["content_type"] == "application/json":
-                data = json.dumps(payload).encode("utf-8")
-            else:
-                data = urllib.parse.urlencode(payload).encode("utf-8")
-            status, raw, headers = self._request(
-                attempt["url"],
+        for url, payload in exchange_attempts:
+            status, raw, _ = self._request(
+                url,
                 method="POST",
-                data=data,
+                data=json.dumps(payload).encode("utf-8"),
                 headers={
-                    "Content-Type": attempt["content_type"],
+                    "Content-Type": "application/json",
                     "Origin": BASE_URL,
                     "Referer": f"{BASE_URL}/auth/login",
                 },
             )
-            auth_cookie_names = self._auth_cookie_names()
-            location = headers.get("Location", "")
-            if status < 400 and (auth_cookie_names or self._looks_like_authenticated_redirect(location)):
-                print(f"[transcribe] login accepted at {attempt['url']}")
+            if status < 400 and self._has_auth_token_cookie():
+                self.auth_headers = {}
+                self._verify_auth(f"firebase exchange at {url}")
                 return
-            if status in (301, 302, 303, 307, 308) and (
-                auth_cookie_names or self._looks_like_authenticated_redirect(location)
-            ):
-                print(f"[transcribe] login redirected from {attempt['url']}")
+            if status not in (401, 403, 404):
+                text = raw.decode("utf-8", errors="replace")
+                print(
+                    f"[transcribe] auth exchange probe at {url} -> HTTP {status}: {text[:200]}",
+                    file=sys.stderr,
+                )
+
+        unsigned_auth_token = self._build_unsigned_auth_token(id_token, refresh_token)
+        strategies = [
+            ("firebase bearer token", {"Authorization": f"Bearer {id_token}"}),
+            ("firebase id token", {"Authorization": id_token}),
+            ("AuthToken cookie", {"Cookie": f"AuthToken={unsigned_auth_token}"}),
+        ]
+        for auth_mode, headers in strategies:
+            self.auth_headers = headers
+            try:
+                self._verify_auth(auth_mode)
                 return
-            print(f"[transcribe] login attempt failed: {attempt['url']} -> HTTP {status}", file=sys.stderr)
+            except RuntimeError as exc:
+                print(f"[transcribe] auth strategy failed: {auth_mode}: {exc}", file=sys.stderr)
 
         raise RuntimeError(
-            "Transcript.lol credential login failed on all known endpoints. "
-            "The public /auth/login route only returned non-auth cookies during verification. "
-            "Set TRANSCRIPT_LOL_API_KEY, TRANSCRIPT_LOL_AUTH_TOKEN, or "
-            "TRANSCRIPT_LOL_SESSION_COOKIE to bypass web login discovery."
+            "Firebase sign-in worked, but Transcript.lol API auth was rejected. "
+            "If the site requires a signed AuthToken cookie exchange, add a working "
+            "TRANSCRIPT_LOL_AUTH_TOKEN or TRANSCRIPT_LOL_SESSION_COOKIE to .env."
         )
 
-    def _auth_cookie_names(self) -> list[str]:
-        ignored = {"lb_affinity", "NEXT_LOCALE"}
-        names = []
-        for cookie in self.cookie_jar:
-            if cookie.name not in ignored:
-                names.append(cookie.name)
-        return names
+    def _has_auth_token_cookie(self) -> bool:
+        return any(cookie.name == "AuthToken" for cookie in self.cookie_jar)
 
     @staticmethod
-    def _looks_like_authenticated_redirect(location: str) -> bool:
-        if not location:
-            return False
-        lowered = location.lower()
-        if "/auth/login" in lowered or "/login" == lowered.rstrip("/"):
-            return False
-        return "/dashboard" in lowered or "/spaces/" in lowered or "/recordings" in lowered
+    def _build_unsigned_auth_token(id_token: str, refresh_token: str) -> str:
+        header = {"alg": "none", "typ": "JWT"}
+        payload = {"id_token": id_token, "refresh_token": refresh_token}
+
+        def encode_segment(value: dict[str, str]) -> str:
+            raw = json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
+            return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+        return f"{encode_segment(header)}.{encode_segment(payload)}."
 
     def create_recording(
         self,
@@ -319,6 +356,12 @@ def extract_status(recording: dict) -> str:
         value = recording.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip().upper()
+    transcript = recording.get("transcript")
+    if isinstance(transcript, dict):
+        for key in ("status", "state", "processingStatus"):
+            value = transcript.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip().upper()
     return "UNKNOWN"
 
 
@@ -348,7 +391,7 @@ def wait_for_transcript(client: TranscriptClient, recording_id: str, fmt: str, t
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Submit a URL to Transcript.lol and print the transcript.")
-    parser.add_argument("url", help="Media URL to transcribe")
+    parser.add_argument("url", nargs="?", help="Media URL to transcribe")
     parser.add_argument("--language", default="en", help="Transcript language (default: en)")
     parser.add_argument(
         "--format",
@@ -358,6 +401,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--title", help="Optional title override")
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SECONDS, help="Polling timeout in seconds")
+    parser.add_argument("--test-auth", action="store_true", help="Authenticate and exit without creating a recording")
     return parser.parse_args()
 
 
@@ -365,14 +409,21 @@ def main() -> None:
     args = parse_args()
     env = load_env()
 
+    client = TranscriptClient(env)
+    client.authenticate()
+
+    if args.test_auth:
+        print(f"[transcribe] auth ok for space_id={client.space_id}")
+        return
+
+    if not args.url:
+        raise RuntimeError("URL is required unless --test-auth is used.")
+
     source = detect_source(args.url)
     media_type = detect_media_type(source)
     title = args.title or derive_title(args.url)
 
     print(f"[transcribe] source={source} media_type={media_type} language={args.language}")
-
-    client = TranscriptClient(env)
-    client.authenticate()
 
     recording_id = client.create_recording(
         url=args.url,
