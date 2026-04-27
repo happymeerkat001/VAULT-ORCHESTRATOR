@@ -16,8 +16,8 @@ One-time setup:
      EOF
   3. chmod 600 ~/.config/vault-orchestrator/google_credentials
   4. python3 briefing_sync.py          # verify manually
-  5. crontab -e, add (runs 6 AM daily):
-     0 6 * * * /usr/bin/python3 /Users/leon/Documents/Code/vault-orchestrator/briefing_sync.py >> /Users/leon/Library/Logs/briefing_sync.log 2>&1
+  5. crontab -e, add (runs 6:05 AM daily):
+     5 6 * * * /usr/bin/python3 /Users/leon/Documents/Code/vault-orchestrator/ingest/briefing_sync.py >> /Users/leon/Library/Logs/briefing_sync.log 2>&1
 
 No external dependencies — stdlib only.
 """
@@ -281,6 +281,7 @@ def write_briefing(date_str: str, markdown: str) -> Path:
 def main() -> None:
     today = today_local()
     print(f"[briefing_sync] date={today}")
+    print(f"[briefing_sync] output_path={DAILY_NOTES_PATH / f'{today}.md'}")
 
     # 1. Load credentials
     try:

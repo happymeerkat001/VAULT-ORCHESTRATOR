@@ -2,7 +2,7 @@ import re
 from pathlib import Path
 
 VAULT_PATH = Path(
-    "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Neural-Orchestrator"
+    "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Neural-orchestrator"
 ).expanduser()
 DAILY_NOTES_PATH = VAULT_PATH / "Daily Notes"
 HEDY_AI_PATH = VAULT_PATH / "Hedy-AI"

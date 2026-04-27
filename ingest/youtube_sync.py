@@ -31,8 +31,9 @@ except ImportError:
 
 # ── CONFIGURATION ─────────────────────────────────────────────────────────────
 VAULT_PATH = Path(
-    "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Neural-Orchestrator"
+    "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Neural-orchestrator"
 ).expanduser()
+DAILY_NOTES_PATH = VAULT_PATH / "Daily Notes"
 LOCAL_TIMEZONE = "America/Chicago"
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -210,7 +211,7 @@ def build_markdown(title: str, url: str, language: str, summary: str, transcript
 
 
 def append_to_note(date_str: str, block: str) -> Path:
-    note_path = VAULT_PATH / f"{date_str}.md"
+    note_path = DAILY_NOTES_PATH / f"{date_str}.md"
     note_path.parent.mkdir(parents=True, exist_ok=True)
     has_section = note_path.exists() and "## YouTube" in note_path.read_text(encoding="utf-8")
     prefix = "" if has_section else "\n## YouTube\n"
