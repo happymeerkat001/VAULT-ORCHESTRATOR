@@ -49,7 +49,8 @@ BRIEFING_HEADER = "## Morning Briefing ☀️"
 # ─────────────────────────────────────────────────────────────────────────────
 
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
-GOOGLE_CALENDAR_URL = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
+GOOGLE_CALENDAR_BASE_URL = "https://www.googleapis.com/calendar/v3/calendars"
+GOOGLE_CALENDAR_LIST_URL = "https://www.googleapis.com/calendar/v3/users/me/calendarList"
 GOOGLE_GMAIL_LIST_URL = "https://www.googleapis.com/gmail/v1/users/me/messages"
 MINIMAX_URL = "https://api.minimaxi.chat/v1/chat/completions"
 
@@ -172,15 +173,75 @@ def _get_json(url: str, access_token: str) -> dict:
         return json.loads(resp.read().decode("utf-8"))
 
 
+def fetch_all_calendars(access_token: str) -> list[str]:
+    calendar_ids = []
+    page_token = None
+
+    while True:
+        params = {
+            "showDeleted": "false",
+            "showHidden": "false",
+        }
+        if page_token:
+            params["pageToken"] = page_token
+
+        data = _get_json(
+            f"{GOOGLE_CALENDAR_LIST_URL}?{urllib.parse.urlencode(params)}",
+            access_token,
+        )
+        for calendar in data.get("items") or []:
+            if calendar.get("selected") is False:
+                continue
+            calendar_id = calendar.get("id")
+            if calendar_id:
+                calendar_ids.append(calendar_id)
+
+        page_token = data.get("nextPageToken")
+        if not page_token:
+            break
+
+    return calendar_ids
+
+
+def _event_start_sort_key(event: dict) -> str:
+    start = event.get("start") or {}
+    return start.get("dateTime") or start.get("date") or ""
+
+
 def fetch_calendar_events(access_token: str) -> tuple[dict, int]:
     start, end, lookahead = get_calendar_bounds()
-    params = urllib.parse.urlencode({
-        "timeMin": start,
-        "timeMax": end,
-        "singleEvents": "true",
-        "orderBy": "startTime",
-    })
-    return _get_json(f"{GOOGLE_CALENDAR_URL}?{params}", access_token), lookahead
+    calendar_ids = fetch_all_calendars(access_token)
+    events = []
+
+    for calendar_id in calendar_ids:
+        page_token = None
+        encoded_calendar_id = urllib.parse.quote(calendar_id, safe="")
+
+        while True:
+            params = {
+                "timeMin": start,
+                "timeMax": end,
+                "singleEvents": "true",
+                "orderBy": "startTime",
+            }
+            if page_token:
+                params["pageToken"] = page_token
+
+            data = _get_json(
+                (
+                    f"{GOOGLE_CALENDAR_BASE_URL}/{encoded_calendar_id}/events?"
+                    f"{urllib.parse.urlencode(params)}"
+                ),
+                access_token,
+            )
+            events.extend(data.get("items") or [])
+
+            page_token = data.get("nextPageToken")
+            if not page_token:
+                break
+
+    events.sort(key=_event_start_sort_key)
+    return {"items": events}, lookahead
 
 
 def fetch_starred_emails(access_token: str) -> dict:
