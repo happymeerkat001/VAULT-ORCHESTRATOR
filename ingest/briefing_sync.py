@@ -16,8 +16,10 @@ One-time setup:
      EOF
   3. chmod 600 ~/.config/vault-orchestrator/google_credentials
   4. python3 briefing_sync.py          # verify manually
-  5. crontab -e, add (runs 6:05 AM daily):
-     5 6 * * * /usr/bin/python3 /Users/leon/Documents/Code/vault-orchestrator/ingest/briefing_sync.py >> /Users/leon/Library/Logs/briefing_sync.log 2>&1
+  5. Use /Users/leon/.claude/scripts/run-briefing.sh from the user LaunchAgent
+     at ~/Library/LaunchAgents/com.leon.briefing.daily.plist for the scheduled run.
+     The old direct cron->python path is not the supported setup on macOS because
+     Full Disk Access restrictions can block that execution path.
 
 No external dependencies — stdlib only.
 """

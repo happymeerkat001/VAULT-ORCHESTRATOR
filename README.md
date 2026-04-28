@@ -42,17 +42,24 @@ EOF
 chmod 600 ~/.config/vault-orchestrator/google_credentials
 ```
 
-### 2. Crontab
+### 2. Scheduling
+
+Use the Claude wrapper plus a user LaunchAgent. The old direct cron entry below is
+kept only as historical context because macOS Full Disk Access restrictions can
+break `python3` when launched from cron.
 
 ```sh
-crontab -e
+/bin/zsh ~/.claude/scripts/run-briefing.sh
 ```
 
-Add:
+Install/load the LaunchAgent:
 ```
-# Daily briefing — 6:05 AM
-5 6 * * * /usr/bin/python3 /Users/leon/Documents/Code/vault-orchestrator/ingest/briefing_sync.py >> /Users/leon/Library/Logs/briefing_sync.log 2>&1
+launchctl load ~/Library/LaunchAgents/com.leon.briefing.daily.plist
+launchctl list | grep briefing
+```
 
+Manual verification:
+```
 python3 ingest/briefing_sync.py
 ```
 
