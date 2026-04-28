@@ -10,6 +10,7 @@ Auth test:
   python3 /Users/leon/Documents/Code/vault-orchestrator/cli/transcribe.py --test-auth
 
 Optional env vars in .env:
+  FIREBASE_API_KEY
   TRANSCRIPT_LOL_SPACE_ID
   TRANSCRIPT_LOL_API_KEY
   TRANSCRIPT_LOL_AUTH_TOKEN
@@ -38,10 +39,8 @@ ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 
 BASE_URL = "https://transcript.lol"
 API_BASE_URL = f"{BASE_URL}/api/v1"
-FIREBASE_API_KEY = "AIzaSyDxjpKLbNozOTGsH43wXvP2gYiYstCar3Y"
 FIREBASE_SIGN_IN_URL = (
     "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword"
-    f"?key={FIREBASE_API_KEY}"
 )
 DEFAULT_SPACE_ID = "678568d76d74d77ee0ef382c"
 DEFAULT_TIMEOUT_SECONDS = 600
@@ -180,8 +179,12 @@ class TranscriptClient:
         raise RuntimeError(f"Unable to verify Transcript.lol auth via {auth_mode}.")
 
     def _login_with_firebase(self, email: str, password: str) -> None:
+        firebase_api_key = self.env.get("FIREBASE_API_KEY", "")
+        if not firebase_api_key:
+            raise RuntimeError("FIREBASE_API_KEY not set in .env")
+        url = f"{FIREBASE_SIGN_IN_URL}?key={firebase_api_key}"
         data = self._json_request(
-            FIREBASE_SIGN_IN_URL,
+            url,
             method="POST",
             payload={
                 "email": email,
