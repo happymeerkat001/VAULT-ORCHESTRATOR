@@ -10,8 +10,12 @@ Manual run:
 from __future__ import annotations
 
 import argparse
+import json
 import re
+import subprocess
 import sys
+import tempfile
+import urllib.parse
 from pathlib import Path
 
 from transcribe import API_BASE_URL, TERMINAL_STATUSES, TranscriptClient, extract_status, load_env
@@ -77,7 +81,113 @@ def coalesce_string(recording: dict, *keys: str) -> str:
     return ""
 
 
-def build_markdown(recording: dict, transcript_text: str) -> str:
+def extract_youtube_id(url: str) -> str | None:
+    if not url:
+        return None
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.netloc.lower().removeprefix("www.")
+    path = parsed.path.strip("/")
+
+    if host in {"youtube.com", "m.youtube.com"}:
+        if path == "watch":
+            video_id = urllib.parse.parse_qs(parsed.query).get("v", [""])[0]
+            return video_id or None
+        if path.startswith("shorts/") or path.startswith("embed/") or path.startswith("live/"):
+            parts = path.split("/")
+            if len(parts) >= 2 and parts[1]:
+                return parts[1]
+    if host == "youtu.be":
+        parts = path.split("/")
+        if parts and parts[0]:
+            return parts[0]
+    return None
+
+
+def fetch_youtube_transcript(video_id: str) -> str | None:
+    if not video_id:
+        return None
+    watch_url = f"https://www.youtube.com/watch?v={urllib.parse.quote(video_id)}"
+    try:
+        with tempfile.TemporaryDirectory(prefix="yt-sub-") as temp_dir:
+            output_template = str(Path(temp_dir) / f"yt-sub-{video_id}.%(ext)s")
+            cmd = [
+                sys.executable, "-m", "yt_dlp",
+                "--write-auto-sub",
+                "--sub-lang",
+                "en",
+                "--skip-download",
+                "--sub-format",
+                "json3",
+                "--js-runtimes",
+                "node",
+                "-o",
+                output_template,
+                watch_url,
+            ]
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                return None
+
+            subtitle_files = sorted(Path(temp_dir).glob("*.json3"))
+            if not subtitle_files:
+                return None
+
+            data = json.loads(subtitle_files[0].read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                return None
+            events = data.get("events")
+            if not isinstance(events, list):
+                return None
+
+            lines: list[str] = []
+            for event in events:
+                if not isinstance(event, dict):
+                    continue
+                segs = event.get("segs")
+                if not isinstance(segs, list):
+                    continue
+                parts: list[str] = []
+                for seg in segs:
+                    if not isinstance(seg, dict):
+                        continue
+                    text = seg.get("utf8")
+                    if isinstance(text, str):
+                        cleaned = re.sub(r"\s+", " ", text.replace("\n", " ")).strip()
+                        if cleaned:
+                            parts.append(cleaned)
+                if parts:
+                    lines.append(" ".join(parts))
+            if not lines:
+                return None
+            return "\n".join(lines)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def get_transcript_text(client: TranscriptClient, recording: dict) -> tuple[str, str]:
+    recording_id = coalesce_string(recording, "id", "recordingId")
+    if not recording_id:
+        raise RuntimeError(f"Recording missing id: {recording!r}")
+
+    source = coalesce_string(recording, "source").upper()
+    source_url = coalesce_string(recording, "sourceUrl", "url")
+    if source == "YOUTUBE":
+        video_id = extract_youtube_id(source_url)
+        if video_id:
+            youtube_text = fetch_youtube_transcript(video_id)
+            if youtube_text:
+                return youtube_text, "YouTube captions"
+
+    return client.get_transcript(recording_id, "text"), "transcript.lol"
+
+
+def build_markdown(recording: dict, transcript_text: str, transcript_source: str) -> str:
     title = coalesce_string(recording, "title", "name") or "Untitled"
     source_url = coalesce_string(recording, "sourceUrl", "url")
     created_at = coalesce_string(recording, "createdAt", "created_at", "date")
@@ -87,7 +197,8 @@ def build_markdown(recording: dict, transcript_text: str) -> str:
         f"# {title}\n\n"
         f"**Source:** {source_url or 'Unknown'}\n"
         f"**Date:** {created_at or 'Unknown'}\n"
-        f"**Language:** {language or 'Unknown'}\n\n"
+        f"**Language:** {language or 'Unknown'}\n"
+        f"**Transcript source:** {transcript_source}\n\n"
         "---\n\n"
         f"{transcript_text.rstrip()}\n"
     )
@@ -141,13 +252,13 @@ def main() -> None:
             print(f"[export] would export {destination.name}")
             continue
 
-        if not recording_id:
-            raise RuntimeError(f"Recording missing id: {recording!r}")
-
-        transcript_text = client.get_transcript(recording_id, "text")
-        destination.write_text(build_markdown(recording, transcript_text), encoding="utf-8")
+        transcript_text, transcript_source = get_transcript_text(client, recording)
+        destination.write_text(
+            build_markdown(recording, transcript_text, transcript_source),
+            encoding="utf-8",
+        )
         written += 1
-        print(f"[export] wrote {destination}")
+        print(f"[export] wrote {destination} source={transcript_source}")
 
     print(
         "[export] summary: "
