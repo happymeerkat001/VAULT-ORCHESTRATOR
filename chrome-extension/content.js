@@ -34,12 +34,34 @@
       setStatus("Saving...", "#606060");
       button.disabled = true;
       try {
+        const expandButton =
+          document.querySelector("ytd-text-inline-expander tp-yt-paper-button#expand") ||
+          document.querySelector("#description-inline-expander tp-yt-paper-button#expand") ||
+          document.querySelector("tp-yt-paper-button#expand");
+        if (expandButton instanceof HTMLElement) {
+          expandButton.click();
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+
+        const description =
+          document.querySelector("#description-inner")?.innerText?.trim() ||
+          document.querySelector("#description")?.innerText?.trim() ||
+          document.querySelector('meta[name="description"]')?.content?.trim() ||
+          "";
+
+        const aiParas = [...document.querySelectorAll("p.videoSummaryContentViewModelParagraph")]
+          .map((p) => p.textContent?.trim())
+          .filter(Boolean);
+        const ai_summary = aiParas.join("\n\n");
+
         const response = await fetch(SERVER_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             url: window.location.href,
-            title: document.title.replace(/\s*-\s*YouTube\s*$/, "").trim()
+            title: document.title.replace(/\s*-\s*YouTube\s*$/, "").trim(),
+            description,
+            ai_summary
           })
         });
 
