@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "YouTube -> Obsidian Transcript",
+  "version": "1.0.0",
+  "permissions": ["activeTab"],
+  "content_scripts": [
+    {
+      "matches": ["*://www.youtube.com/watch*"],
+      "js": ["content.js"]
+    }
+  ]
+}
