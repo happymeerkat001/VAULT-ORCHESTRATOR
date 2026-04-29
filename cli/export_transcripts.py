@@ -10,6 +10,7 @@ Manual run:
 from __future__ import annotations
 
 import argparse
+from datetime import date
 import json
 import re
 import subprocess
@@ -138,36 +139,40 @@ def fetch_youtube_transcript(video_id: str) -> str | None:
             if not subtitle_files:
                 return None
 
-            data = json.loads(subtitle_files[0].read_text(encoding="utf-8"))
-            if not isinstance(data, dict):
-                return None
-            events = data.get("events")
-            if not isinstance(events, list):
-                return None
-
-            lines: list[str] = []
-            for event in events:
-                if not isinstance(event, dict):
-                    continue
-                segs = event.get("segs")
-                if not isinstance(segs, list):
-                    continue
-                parts: list[str] = []
-                for seg in segs:
-                    if not isinstance(seg, dict):
-                        continue
-                    text = seg.get("utf8")
-                    if isinstance(text, str):
-                        cleaned = re.sub(r"\s+", " ", text.replace("\n", " ")).strip()
-                        if cleaned:
-                            parts.append(cleaned)
-                if parts:
-                    lines.append(" ".join(parts))
-            if not lines:
-                return None
-            return "\n".join(lines)
+            return parse_json3_transcript(subtitle_files[0])
     except (OSError, json.JSONDecodeError):
         return None
+
+
+def parse_json3_transcript(json3_path: Path) -> str | None:
+    data = json.loads(json3_path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        return None
+    events = data.get("events")
+    if not isinstance(events, list):
+        return None
+
+    lines: list[str] = []
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        segs = event.get("segs")
+        if not isinstance(segs, list):
+            continue
+        parts: list[str] = []
+        for seg in segs:
+            if not isinstance(seg, dict):
+                continue
+            text = seg.get("utf8")
+            if isinstance(text, str):
+                cleaned = re.sub(r"\s+", " ", text.replace("\n", " ")).strip()
+                if cleaned:
+                    parts.append(cleaned)
+        if parts:
+            lines.append(" ".join(parts))
+    if not lines:
+        return None
+    return "\n".join(lines)
 
 
 def get_transcript_text(client: TranscriptClient, recording: dict) -> tuple[str, str]:
@@ -192,6 +197,7 @@ def build_markdown(recording: dict, transcript_text: str, transcript_source: str
     source_url = coalesce_string(recording, "sourceUrl", "url")
     created_at = coalesce_string(recording, "createdAt", "created_at", "date")
     language = coalesce_string(recording, "language", "locale")
+    today_tag = date.today().isoformat()
 
     return (
         f"# {title}\n\n"
@@ -200,7 +206,8 @@ def build_markdown(recording: dict, transcript_text: str, transcript_source: str
         f"**Language:** {language or 'Unknown'}\n"
         f"**Transcript source:** {transcript_source}\n\n"
         "---\n\n"
-        f"{transcript_text.rstrip()}\n"
+        f"{transcript_text.rstrip()}\n\n"
+        f"#{today_tag}\n"
     )
 
 
@@ -211,9 +218,25 @@ def is_exportable_status(status: str) -> bool:
     return normalized.endswith("_COMPLETE") or normalized.endswith("_COMPLETED")
 
 
+def ensure_daily_note_link(daily_note_path: Path, transcript_title: str) -> None:
+    link = f"[[Transcripts/{transcript_title}]]"
+    daily_note_path.parent.mkdir(parents=True, exist_ok=True)
+    if not daily_note_path.exists():
+        daily_note_path.write_text("", encoding="utf-8")
+    content = daily_note_path.read_text(encoding="utf-8")
+    if link in content:
+        return
+
+    to_append = f"\n{link}\n" if content and not content.endswith("\n") else f"{link}\n"
+    with daily_note_path.open("a", encoding="utf-8") as handle:
+        handle.write(to_append)
+
+
 def main() -> None:
     args = parse_args()
     output_dir = args.output_dir.expanduser()
+    vault_root = output_dir.parent
+    daily_note_path = vault_root / "Daily Notes" / f"{date.today().isoformat()}.md"
 
     env = load_env()
     client = TranscriptClient(env)
@@ -257,6 +280,7 @@ def main() -> None:
             build_markdown(recording, transcript_text, transcript_source),
             encoding="utf-8",
         )
+        ensure_daily_note_link(daily_note_path, safe_title)
         written += 1
         print(f"[export] wrote {destination} source={transcript_source}")
 
