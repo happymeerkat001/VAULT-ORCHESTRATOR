@@ -43,7 +43,13 @@ class TranscriptService:
         self.client: TranscriptClient | None = None
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-    def save_from_url(self, url: str, title: str | None) -> dict[str, str]:
+    def save_from_url(
+        self,
+        url: str,
+        title: str | None,
+        description: str = "",
+        ai_summary: str = "",
+    ) -> dict[str, str]:
         cleaned_url = (url or "").strip()
         if not cleaned_url:
             raise ValueError("Missing required field: url")
@@ -73,10 +79,15 @@ class TranscriptService:
             "createdAt": date.today().isoformat(),
             "language": "en",
         }
-        destination.write_text(
-            build_markdown(metadata, transcript_text, transcript_source),
-            encoding="utf-8",
+        markdown_content = build_markdown(
+            metadata,
+            transcript_text,
+            transcript_source,
+            description=description,
+            ai_summary=ai_summary,
         )
+        destination.write_text(markdown_content, encoding="utf-8")
+        print(f"[transcript_server] wrote {destination.name}: has_description={bool(description)}, has_ai_summary={bool(ai_summary)}, md_includes_description={'## Description' in markdown_content}, md_includes_ai_summary={'## AI Summary' in markdown_content}")
         ensure_daily_note_link(self.daily_note_path, safe_title)
 
         return {
@@ -121,7 +132,14 @@ class Handler(BaseHTTPRequestHandler):
             body = self._read_json_body()
             url = str(body.get("url", "")).strip()
             title = body.get("title")
-            result = self.service.save_from_url(url, title if isinstance(title, str) else None)
+            description = body.get("description", "")
+            ai_summary = body.get("ai_summary", "")
+            result = self.service.save_from_url(
+                url,
+                title if isinstance(title, str) else None,
+                description if isinstance(description, str) else "",
+                ai_summary if isinstance(ai_summary, str) else "",
+            )
             self._send_json(200, result)
         except ValueError as exc:
             self._send_json(400, {"status": "error", "message": str(exc)})

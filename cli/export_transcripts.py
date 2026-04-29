@@ -192,12 +192,26 @@ def get_transcript_text(client: TranscriptClient, recording: dict) -> tuple[str,
     return client.get_transcript(recording_id, "text"), "transcript.lol"
 
 
-def build_markdown(recording: dict, transcript_text: str, transcript_source: str) -> str:
+def build_markdown(
+    recording: dict,
+    transcript_text: str,
+    transcript_source: str,
+    description: str = "",
+    ai_summary: str = "",
+) -> str:
     title = coalesce_string(recording, "title", "name") or "Untitled"
     source_url = coalesce_string(recording, "sourceUrl", "url")
     created_at = coalesce_string(recording, "createdAt", "created_at", "date")
     language = coalesce_string(recording, "language", "locale")
     today_tag = date.today().isoformat()
+    description_text = description.strip()
+    ai_summary_text = ai_summary.strip()
+
+    optional_sections = ""
+    if description_text:
+        optional_sections += f"## Description\n\n{description_text}\n\n"
+    if ai_summary_text:
+        optional_sections += f"## AI Summary\n\n{ai_summary_text}\n\n"
 
     return (
         f"# {title}\n\n"
@@ -205,6 +219,7 @@ def build_markdown(recording: dict, transcript_text: str, transcript_source: str
         f"**Date:** {created_at or 'Unknown'}\n"
         f"**Language:** {language or 'Unknown'}\n"
         f"**Transcript source:** {transcript_source}\n\n"
+        f"{optional_sections}"
         "---\n\n"
         f"{transcript_text.rstrip()}\n\n"
         f"#{today_tag}\n"
