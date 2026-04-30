@@ -104,7 +104,7 @@ def extract_youtube_id(url: str) -> str | None:
     return None
 
 
-def fetch_youtube_transcript(video_id: str) -> str | None:
+def fetch_youtube_transcript(video_id: str, include_timestamps: bool = False) -> str | None:
     if not video_id:
         return None
     watch_url = f"https://www.youtube.com/watch?v={urllib.parse.quote(video_id)}"
@@ -139,12 +139,21 @@ def fetch_youtube_transcript(video_id: str) -> str | None:
             if not subtitle_files:
                 return None
 
-            return parse_json3_transcript(subtitle_files[0])
+            return parse_json3_transcript(subtitle_files[0], include_timestamps=include_timestamps)
     except (OSError, json.JSONDecodeError):
         return None
 
 
-def parse_json3_transcript(json3_path: Path) -> str | None:
+def format_timestamp(milliseconds: int) -> str:
+    total_seconds = max(0, milliseconds // 1000)
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes:02d}:{seconds:02d}"
+
+
+def parse_json3_transcript(json3_path: Path, include_timestamps: bool = False) -> str | None:
     data = json.loads(json3_path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         return None
@@ -169,7 +178,12 @@ def parse_json3_transcript(json3_path: Path) -> str | None:
                 if cleaned:
                     parts.append(cleaned)
         if parts:
-            lines.append(" ".join(parts))
+            line = " ".join(parts)
+            if include_timestamps:
+                start_ms = event.get("tStartMs")
+                if isinstance(start_ms, int):
+                    line = f"[{format_timestamp(start_ms)}] {line}"
+            lines.append(line)
     if not lines:
         return None
     return "\n".join(lines)
