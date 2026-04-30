@@ -46,7 +46,7 @@ VAULT_PATH = Path(
 ).expanduser()
 DAILY_NOTES_PATH = VAULT_PATH / "Daily Notes"
 LOCAL_TIMEZONE = "America/Chicago"
-MAX_STARRED_EMAILS = 10
+MAX_STARRED_EMAILS = 3
 BRIEFING_HEADER = "## Morning Briefing ☀️"
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -59,7 +59,8 @@ MINIMAX_URL = "https://api.minimaxi.chat/v1/chat/completions"
 EMAIL_SYSTEM_PROMPT = (
     "You are preparing a concise daily briefing in markdown for the user. "
     "Output ONLY the content for two sections. Do not mention Slack anywhere. "
-    "Do not wrap output in code fences. Do not include a title or date header.\n\n"
+    "Do not wrap output in code fences. Do not include a title or date header. "
+    "All data is already provided in the JSON below — do not reference MCP or any external tools.\n\n"
     "Section 1: '# To-Think 🧠' — reflections, learning items, ideas to ponder. "
     "Each item is a markdown checkbox: '- [ ] item'.\n\n"
     "Section 2: '## To-Do ✅' — actionable tasks derived from calendar and emails. "
@@ -68,11 +69,14 @@ EMAIL_SYSTEM_PROMPT = (
     "with times in 12-hour format. The 'calendarDays' field tells you how many days "
     "of events are included. Group events by date with a bold date label "
     "(e.g. **Sunday 04/26**, **Monday 04/27**) when calendarDays > 1.\n\n"
+    "If no calendar events exist, write exactly: 'No events scheduled.'\n\n"
     "Then add '## Email Highlights 📧' with a one-line summary header "
-    "'**Starred:** N emails' followed by checklist items. List ONLY the emails "
-    "present in the data — do not add any extras.\n\n"
+    "'**Starred:** N emails' followed by checklist items. List only the top 3 starred emails "
+    "present in the data — do not add any extras. If no starred emails exist, "
+    "write exactly: 'No starred emails.'\n\n"
     "If 'rolloverFromYesterday' is present, include those unchecked items "
-    "in the appropriate section (To-Think or To-Do) — do not drop them.\n\n"
+    "in the briefing — do not drop them. Place all rollover items in the To-Do section; "
+    "never place rollover items in Calendar or Email Highlights.\n\n"
     "Keep it concise. No prose paragraphs. Checkboxes only."
 )
 
@@ -308,7 +312,7 @@ def generate_briefing(payload: dict, minimax_api_key: str) -> str:
 
 
 def get_yesterday_unchecked(date_str: str) -> list[str]:
-    """Extract unchecked items from yesterday's daily note."""
+    """Extract unchecked items only from To-Think and To-Do in yesterday's note."""
     if _HAS_ZONEINFO:
         tz = ZoneInfo(LOCAL_TIMEZONE)
         today = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=tz)
@@ -321,7 +325,22 @@ def get_yesterday_unchecked(date_str: str) -> list[str]:
         return []
 
     content = yesterday_path.read_text(encoding="utf-8")
-    unchecked = re.findall(r"^- \[ \] .+$", content, re.MULTILINE)
+    lines = content.splitlines()
+
+    collecting = False
+    unchecked: list[str] = []
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped in {"# To-Think 🧠", "## To-Do ✅"}:
+            collecting = True
+            continue
+        if collecting and stripped.startswith("## ") and stripped not in {"## To-Do ✅"}:
+            collecting = False
+            continue
+        if collecting and re.match(r"^- \[ \] .+$", line):
+            unchecked.append(line)
+
     return unchecked
 
 
