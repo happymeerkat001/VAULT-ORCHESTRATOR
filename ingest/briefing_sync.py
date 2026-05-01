@@ -60,7 +60,7 @@ EMAIL_SYSTEM_PROMPT = (
     "You are preparing a concise daily briefing in markdown for the user. "
     "Output ONLY the content for two sections. Do not mention Slack anywhere. "
     "Do not wrap output in code fences. Do not include a title or date header. "
-    "All data is already provided in the JSON below — do not reference MCP or any external tools.\n\n"
+    "All data is already provided in the JSON below — use only this data.\n\n"
     "Section 1: '# To-Think 🧠' — reflections, learning items, ideas to ponder. "
     "Each item is a markdown checkbox: '- [ ] item'.\n\n"
     "Section 2: '## To-Do ✅' — actionable tasks derived from calendar and emails. "
@@ -350,8 +350,10 @@ def write_briefing(date_str: str, markdown: str) -> Path:
 
     if out_path.exists():
         existing = out_path.read_text(encoding="utf-8")
-        if BRIEFING_HEADER in existing:
-            print(f"[briefing_sync] {BRIEFING_HEADER} already present in {out_path.name}, skipping.")
+        # Check for the main header or any partial briefing artifacts
+        briefing_markers = (BRIEFING_HEADER, "## Calendar 📅", "## Email Highlights 📧", "## Today's Focus 🧐")
+        if any(marker in existing for marker in briefing_markers):
+            print(f"[briefing_sync] briefing content already present in {out_path.name}, skipping.")
             return out_path
         with open(out_path, "a", encoding="utf-8") as f:
             f.write(f"\n{markdown}")
