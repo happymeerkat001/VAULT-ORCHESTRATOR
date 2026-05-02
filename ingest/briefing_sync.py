@@ -27,6 +27,7 @@ No external dependencies — stdlib only.
 import json
 import re
 import sys
+import time
 import urllib.request
 import urllib.error
 import urllib.parse
@@ -311,6 +312,17 @@ def generate_briefing(payload: dict, minimax_api_key: str) -> str:
     return content
 
 
+def read_text_with_retry(path: Path, attempts: int = 10, delay_s: float = 0.5) -> str:
+    last_exc: Exception | None = None
+    for _ in range(max(1, attempts)):
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError as exc:
+            last_exc = exc
+            time.sleep(delay_s)
+    raise last_exc or OSError(f"Unable to read {path}")
+
+
 def get_yesterday_unchecked(date_str: str) -> list[str]:
     """Extract unchecked items only from To-Think and To-Do in yesterday's note."""
     if _HAS_ZONEINFO:
@@ -324,7 +336,7 @@ def get_yesterday_unchecked(date_str: str) -> list[str]:
     if not yesterday_path.exists():
         return []
 
-    content = yesterday_path.read_text(encoding="utf-8")
+    content = read_text_with_retry(yesterday_path)
     lines = content.splitlines()
 
     collecting = False
@@ -349,7 +361,7 @@ def write_briefing(date_str: str, markdown: str) -> Path:
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     if out_path.exists():
-        existing = out_path.read_text(encoding="utf-8")
+        existing = read_text_with_retry(out_path)
         # Check for the main header or any partial briefing artifacts
         briefing_markers = (BRIEFING_HEADER, "## Calendar 📅", "## Email Highlights 📧", "## Today's Focus 🧐")
         if any(marker in existing for marker in briefing_markers):
@@ -398,7 +410,11 @@ def main() -> None:
         sys.exit(1)
 
     # 4. Gather rollover items from yesterday
-    rollover = get_yesterday_unchecked(today)
+    try:
+        rollover = get_yesterday_unchecked(today)
+    except OSError as exc:
+        print(f"[WARN] Could not read yesterday's note for rollover: {exc}", file=sys.stderr)
+        rollover = []
     if rollover:
         print(f"[briefing_sync] rollover: {len(rollover)} unchecked item(s) from yesterday")
 
