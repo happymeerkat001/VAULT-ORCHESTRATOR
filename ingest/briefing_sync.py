@@ -81,9 +81,11 @@ EMAIL_SYSTEM_PROMPT = (
     "'**Starred:** N emails' followed by checklist items. List only the top 3 starred emails "
     "present in the data — do not add any extras. If no starred emails exist, "
     "write exactly: 'No starred emails.'\n\n"
-    "If 'rolloverFromYesterday' is present, include those unchecked items "
-    "in the briefing — do not drop them. Place all rollover items in the To-Do section; "
-    "never place rollover items in Calendar or Email Highlights.\n\n"
+    "If 'rolloverToThink' is present, include those unchecked items "
+    "in the To-Think section — do not drop them. "
+    "If 'rolloverToDo' is present, include those unchecked items "
+    "in the To-Do section — do not drop them. "
+    "Never place rollover items in Calendar or Email Highlights.\n\n"
     "Keep it concise. No prose paragraphs. Checkboxes only."
 )
 
@@ -329,7 +331,7 @@ def read_text_with_retry(path: Path, attempts: int = 10, delay_s: float = 0.5) -
     raise last_exc or OSError(f"Unable to read {path}")
 
 
-def get_yesterday_unchecked(date_str: str) -> list[str]:
+def get_yesterday_unchecked(date_str: str) -> tuple[list[str], list[str]]:
     """Extract unchecked items only from To-Think and To-Do in yesterday's note."""
     if _HAS_ZONEINFO:
         tz = ZoneInfo(LOCAL_TIMEZONE)
@@ -340,26 +342,33 @@ def get_yesterday_unchecked(date_str: str) -> list[str]:
     yesterday_path = DAILY_NOTES_PATH / f"{yesterday}.md"
 
     if not yesterday_path.exists():
-        return []
+        return [], []
 
     content = read_text_with_retry(yesterday_path)
     lines = content.splitlines()
 
-    collecting = False
-    unchecked: list[str] = []
+    current_section: str | None = None
+    think_unchecked: list[str] = []
+    todo_unchecked: list[str] = []
 
     for line in lines:
         stripped = line.strip()
-        if stripped in {"# To-Think 🧠", "## To-Do ✅"}:
-            collecting = True
+        if stripped == "# To-Think 🧠":
+            current_section = "think"
             continue
-        if collecting and stripped.startswith("## ") and stripped not in {"## To-Do ✅"}:
-            collecting = False
+        if stripped == "## To-Do ✅":
+            current_section = "todo"
             continue
-        if collecting and re.match(r"^- \[ \] .+$", line):
-            unchecked.append(line)
+        if stripped.startswith("## ") and stripped != "## To-Do ✅":
+            current_section = None
+            continue
+        if current_section and re.match(r"^- \[ \] .+$", line):
+            if current_section == "think":
+                think_unchecked.append(line)
+            elif current_section == "todo":
+                todo_unchecked.append(line)
 
-    return unchecked
+    return think_unchecked, todo_unchecked
 
 
 def build_note_preamble(date_str: str) -> str:
@@ -440,12 +449,15 @@ def main() -> None:
 
     # 4. Gather rollover items from yesterday
     try:
-        rollover = get_yesterday_unchecked(today)
+        think_rollover, todo_rollover = get_yesterday_unchecked(today)
     except OSError as exc:
         print(f"[WARN] Could not read yesterday's note for rollover: {exc}", file=sys.stderr)
-        rollover = []
-    if rollover:
-        print(f"[briefing_sync] rollover: {len(rollover)} unchecked item(s) from yesterday")
+        think_rollover, todo_rollover = [], []
+    if think_rollover or todo_rollover:
+        print(
+            "[briefing_sync] rollover: "
+            f"{len(think_rollover)} To-Think, {len(todo_rollover)} To-Do unchecked item(s) from yesterday"
+        )
 
     # 5. Generate briefing
     payload = {
@@ -455,8 +467,10 @@ def main() -> None:
         "starredEmails": email_data,
         "standingToThinkItems": STANDING_TO_THINK_ITEMS,
     }
-    if rollover:
-        payload["rolloverFromYesterday"] = rollover
+    if think_rollover:
+        payload["rolloverToThink"] = think_rollover
+    if todo_rollover:
+        payload["rolloverToDo"] = todo_rollover
 
     try:
         ai_markdown = generate_briefing(payload, creds["minimax_api_key"])
