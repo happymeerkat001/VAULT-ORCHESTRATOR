@@ -279,6 +279,20 @@ def process_one(
                 )
                 if replaced_text != transcript_text:
                     transcript_dest.write_text(replaced_text, encoding="utf-8")
+            # 4) Delete screenshot* images from vault root (post-transfer + post-imgur)
+            _SCREENSHOT_RE = re.compile(r"^screenshot", re.IGNORECASE)
+            _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".heic", ".webp"}
+            for f in sorted(vault_dir.glob("*")):
+                if not f.is_file():
+                    continue
+                if f.suffix.lower() not in _IMAGE_EXTS:
+                    continue
+                if not _SCREENSHOT_RE.match(f.stem):
+                    continue
+                summary.images_deleted += 1
+                if verbose:
+                    print(f"[DELETE screenshot] {f.name}")
+                f.unlink()
 
     # 2) Archive original to processed/ and always move source out of root
     if not source_path.exists():
@@ -318,21 +332,6 @@ def process_one(
                 print(f"[APPEND link] {daily_note_path} :: {link_fragment}")
             _append_line(daily_note_path, link_fragment, apply=apply)
 
-    # 4) Delete screenshot* image files from vault root
-    SCREENSHOT_RE = re.compile(r"^screenshot", re.IGNORECASE)
-    IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".heic", ".webp"}
-    for f in sorted(vault_dir.glob("*")):
-        if not f.is_file():
-            continue
-        if f.suffix.lower() not in IMAGE_EXTS:
-            continue
-        if not SCREENSHOT_RE.match(f.stem):
-            continue
-        summary.images_deleted += 1
-        if verbose:
-            print(f"[DELETE screenshot] {f.name}")
-        if apply:
-            f.unlink()
 
 
 def main() -> int:
