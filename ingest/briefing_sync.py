@@ -49,6 +49,10 @@ DAILY_NOTES_PATH = VAULT_PATH / "Daily Notes"
 LOCAL_TIMEZONE = "America/Chicago"
 MAX_STARRED_EMAILS = 3
 BRIEFING_HEADER = "## Morning Briefing ☀️"
+STANDING_TO_THINK_ITEMS = [
+    "Huberman 5",
+    "No cell phone",
+]
 # ─────────────────────────────────────────────────────────────────────────────
 
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -64,6 +68,8 @@ EMAIL_SYSTEM_PROMPT = (
     "All data is already provided in the JSON below — use only this data.\n\n"
     "Section 1: '# To-Think 🧠' — reflections, learning items, ideas to ponder. "
     "Each item is a markdown checkbox: '- [ ] item'.\n\n"
+    "If 'standingToThinkItems' is present, include every listed item exactly once "
+    "in To-Think as unchecked checklist items. Keep those items verbatim.\n\n"
     "Section 2: '## To-Do ✅' — actionable tasks derived from calendar and emails. "
     "Each item is a markdown checkbox: '- [ ] item'.\n\n"
     "After To-Do, add '## Calendar 📅' listing events as bullets (not checkboxes) "
@@ -356,12 +362,35 @@ def get_yesterday_unchecked(date_str: str) -> list[str]:
     return unchecked
 
 
+def build_note_preamble(date_str: str) -> str:
+    current = datetime.strptime(date_str, "%Y-%m-%d")
+    prev_date = (current - timedelta(days=1)).strftime("%Y-%m-%d")
+    next_date = (current + timedelta(days=1)).strftime("%Y-%m-%d")
+    return (
+        "---\n"
+        "tags:\n"
+        "  - 📓\n"
+        "---\n"
+        f"Days:[[Daily Notes/{prev_date} | Yesterday]] <== [[Daily Notes/{date_str}]] ==> "
+        f"[[Daily Notes/{next_date}|Tomorrow]]\n"
+    )
+
+
+def has_note_preamble(content: str) -> bool:
+    head = "\n".join(content.splitlines()[:20])
+    return head.startswith("---\n") and "tags:" in head and "Days:[[" in head
+
+
 def write_briefing(date_str: str, markdown: str) -> Path:
     out_path = DAILY_NOTES_PATH / f"{date_str}.md"
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    preamble = build_note_preamble(date_str)
 
     if out_path.exists():
         existing = read_text_with_retry(out_path)
+        if not has_note_preamble(existing):
+            existing = f"{preamble}\n{existing.lstrip()}"
+            out_path.write_text(existing, encoding="utf-8")
         # Check for the main header or any partial briefing artifacts
         briefing_markers = (BRIEFING_HEADER, "## Calendar 📅", "## Email Highlights 📧", "## Today's Focus 🧐")
         if any(marker in existing for marker in briefing_markers):
@@ -370,7 +399,7 @@ def write_briefing(date_str: str, markdown: str) -> Path:
         with open(out_path, "a", encoding="utf-8") as f:
             f.write(f"\n{markdown}")
     else:
-        out_path.write_text(markdown, encoding="utf-8")
+        out_path.write_text(f"{preamble}\n{markdown}", encoding="utf-8")
 
     return out_path
 
@@ -424,6 +453,7 @@ def main() -> None:
         "calendarDays": lookahead,
         "calendar": calendar_data,
         "starredEmails": email_data,
+        "standingToThinkItems": STANDING_TO_THINK_ITEMS,
     }
     if rollover:
         payload["rolloverFromYesterday"] = rollover
