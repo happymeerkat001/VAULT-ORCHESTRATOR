@@ -50,7 +50,7 @@ Two credential stores — do not conflate them:
 
 | Store | Contents |
 |-------|----------|
-| `.env` (repo root, gitignored) | `MINIMAX_API_KEY`, `HEDY_API_KEY` |
+| `.env` (repo root, gitignored) | `MINIMAX_API_KEY`, `HEDY_API_KEY`, `IMGUR_CLIENT_ID` |
 | `~/.config/vault-orchestrator/google_credentials` | Google OAuth2 tokens |
 | `~/.config/mymemo/credentials` | MyMemo JWT + auth0 cookie |
 | `~/.config/anthropic/credentials` | Claude API key (vision_sync only) |

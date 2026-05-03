@@ -2,8 +2,14 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import json
+import os
 import re
 import shutil
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -13,6 +19,7 @@ VAULT_DEFAULT = (
 
 DATE_FILENAME_RE = re.compile(r"^(?P<date>\d{4}-\d{2}-\d{2})\.md$")
 TRANSCRIPT_DATE_RE = re.compile(r"^(?P<date>\d{4}-\d{2}-\d{2})\.md$")
+EMBED_RE = re.compile(r"!\[\[([^\]]+\.(?:png|jpe?g))\]\]", re.IGNORECASE)
 
 
 @dataclass
@@ -35,6 +42,9 @@ class Summary:
     warnings: int = 0
     recovered_transcript_renamed: int = 0
     recovered_links_fixed: int = 0
+    imgur_uploaded: int = 0
+    imgur_skipped_missing: int = 0
+    imgur_failed: int = 0
 
 
 def _iter_root_date_files(vault_dir: Path) -> list[Path]:
@@ -75,10 +85,100 @@ def _describe_action(apply: bool) -> str:
 def _next_duplicate_archive_path(processed_dir: Path, date: str) -> Path:
     idx = 1
     while True:
-        candidate = processed_dir / f"{date}-dup{idx}.md"
+        candidate = processed_dir / f"{date} source-dup{idx}.md"
         if not candidate.exists():
             return candidate
         idx += 1
+
+
+def _load_env() -> dict[str, str]:
+    env_path = Path(__file__).resolve().parent.parent / ".env"
+    values: dict[str, str] = {}
+    if not env_path.exists():
+        return values
+    for raw_line in env_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key:
+            values[key] = value
+    return values
+
+
+def _resolve_embed_image_path(vault_dir: Path, embed_ref: str) -> Path | None:
+    embed_path = Path(embed_ref)
+    candidates = [
+        vault_dir / embed_ref,
+        vault_dir / embed_path.name,
+        vault_dir / "Attachments" / embed_path.name,
+        vault_dir / "Attachments" / "Scans" / embed_path.name,
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _upload_image_to_imgur(image_path: Path, client_id: str) -> str | None:
+    image_b64 = base64.b64encode(image_path.read_bytes()).decode("ascii")
+    payload = urllib.parse.urlencode({"image": image_b64, "type": "base64"}).encode("utf-8")
+    request = urllib.request.Request(
+        "https://api.imgur.com/3/image",
+        data=payload,
+        headers={"Authorization": f"Client-ID {client_id}"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        body = json.loads(response.read().decode("utf-8"))
+    if not body.get("success"):
+        return None
+    data = body.get("data", {})
+    link = data.get("link")
+    if not isinstance(link, str) or not link:
+        return None
+    return link
+
+
+def upload_images_to_imgur(
+    md_text: str,
+    *,
+    vault_dir: Path,
+    client_id: str,
+    verbose: bool,
+    summary: Summary,
+) -> str:
+    if not client_id:
+        return md_text
+
+    def _replace(match: re.Match[str]) -> str:
+        embed_ref = match.group(1).strip()
+        image_path = _resolve_embed_image_path(vault_dir, embed_ref)
+        if image_path is None:
+            summary.imgur_skipped_missing += 1
+            if verbose:
+                print(f"[IMGUR skip missing] {embed_ref}")
+            return match.group(0)
+        try:
+            link = _upload_image_to_imgur(image_path, client_id)
+        except (OSError, TimeoutError, urllib.error.URLError, json.JSONDecodeError):
+            summary.imgur_failed += 1
+            if verbose:
+                print(f"[IMGUR fail] {embed_ref}")
+            return match.group(0)
+        if not link:
+            summary.imgur_failed += 1
+            if verbose:
+                print(f"[IMGUR fail] {embed_ref}")
+            return match.group(0)
+        summary.imgur_uploaded += 1
+        if verbose:
+            print(f"[IMGUR ok] {embed_ref} -> {link}")
+        return f"![]({link})"
+
+    return EMBED_RE.sub(_replace, md_text)
 
 
 def _recover_transcripts_and_links(
@@ -135,6 +235,8 @@ def process_one(
     apply: bool,
     verbose: bool,
     summary: Summary,
+    vault_dir: Path,
+    imgur_client_id: str,
 ) -> None:
     m = DATE_FILENAME_RE.match(source_path.name)
     if not m:
@@ -142,7 +244,7 @@ def process_one(
     date = m.group("date")
 
     transcript_dest = transcripts_dir / f"{date} ingest.md"
-    archive_dest = processed_dir / source_path.name
+    archive_dest = processed_dir / f"{date} source.md"
     daily_note_path = daily_notes_dir / source_path.name
     link_fragment = f"[[{date} ingest]]"
 
@@ -165,6 +267,17 @@ def process_one(
         if apply:
             transcript_dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source_path, transcript_dest)
+            if imgur_client_id:
+                transcript_text = transcript_dest.read_text(encoding="utf-8", errors="ignore")
+                replaced_text = upload_images_to_imgur(
+                    transcript_text,
+                    vault_dir=vault_dir,
+                    client_id=imgur_client_id,
+                    verbose=verbose,
+                    summary=summary,
+                )
+                if replaced_text != transcript_text:
+                    transcript_dest.write_text(replaced_text, encoding="utf-8")
 
     # 2) Archive original to processed/ and always move source out of root
     if not source_path.exists():
@@ -244,6 +357,7 @@ def main() -> int:
         ),
     )
     args = parser.parse_args()
+    imgur_client_id = _load_env().get("IMGUR_CLIENT_ID", "").strip()
 
     vault_dir = Path(args.vault_dir).expanduser().resolve()
     transcripts_dir = vault_dir / "Transcripts"
@@ -268,6 +382,8 @@ def main() -> int:
             apply=args.apply,
             verbose=args.verbose,
             summary=summary,
+            vault_dir=vault_dir,
+            imgur_client_id=imgur_client_id,
         )
 
     if args.recover:
@@ -294,6 +410,9 @@ def main() -> int:
     print(f"- Link skipped (missing daily note): {summary.link_skipped_missing_daily_note}")
     print(f"- Recovered transcript renames: {summary.recovered_transcript_renamed}")
     print(f"- Recovered daily-note links: {summary.recovered_links_fixed}")
+    print(f"- Imgur uploaded: {summary.imgur_uploaded}")
+    print(f"- Imgur skipped (missing local file): {summary.imgur_skipped_missing}")
+    print(f"- Imgur failed: {summary.imgur_failed}")
     if summary.warnings:
         print(f"- Warnings: {summary.warnings}")
 
