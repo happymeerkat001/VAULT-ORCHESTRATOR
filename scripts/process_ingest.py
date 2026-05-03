@@ -203,9 +203,13 @@ def _recover_transcripts_and_links(
         date = m.group("date")
         dest_path = transcripts_dir / f"{date} ingest.md"
         if dest_path.exists():
-            summary.warnings += 1
-            print(f"[WARN recover target exists] {dest_path}")
-            continue
+            idx = 2
+            while True:
+                candidate = transcripts_dir / f"{date} ingest {idx}.md"
+                if not candidate.exists():
+                    dest_path = candidate
+                    break
+                idx += 1
         if verbose:
             print(f"[RECOVER rename] {source_path.name} -> {dest_path.name}")
         if apply:
@@ -216,7 +220,7 @@ def _recover_transcripts_and_links(
         if not daily_note_path.exists():
             continue
         old_link = f"[[Transcripts/{date}]]"
-        new_link = f"[[{date} ingest]]"
+        new_link = f"[[{dest_path.stem}]]"
         text = daily_note_path.read_text(encoding="utf-8", errors="ignore")
         if old_link not in text:
             continue
