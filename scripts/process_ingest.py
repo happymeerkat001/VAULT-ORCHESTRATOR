@@ -45,6 +45,7 @@ class Summary:
     imgur_uploaded: int = 0
     imgur_skipped_missing: int = 0
     imgur_failed: int = 0
+    images_deleted: int = 0
 
 
 def _iter_root_date_files(vault_dir: Path) -> list[Path]:
@@ -317,6 +318,22 @@ def process_one(
                 print(f"[APPEND link] {daily_note_path} :: {link_fragment}")
             _append_line(daily_note_path, link_fragment, apply=apply)
 
+    # 4) Delete screenshot* image files from vault root
+    SCREENSHOT_RE = re.compile(r"^screenshot", re.IGNORECASE)
+    IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".heic", ".webp"}
+    for f in sorted(vault_dir.glob("*")):
+        if not f.is_file():
+            continue
+        if f.suffix.lower() not in IMAGE_EXTS:
+            continue
+        if not SCREENSHOT_RE.match(f.stem):
+            continue
+        summary.images_deleted += 1
+        if verbose:
+            print(f"[DELETE screenshot] {f.name}")
+        if apply:
+            f.unlink()
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(
@@ -413,6 +430,7 @@ def main() -> int:
     print(f"- Imgur uploaded: {summary.imgur_uploaded}")
     print(f"- Imgur skipped (missing local file): {summary.imgur_skipped_missing}")
     print(f"- Imgur failed: {summary.imgur_failed}")
+    print(f"- Screenshot images deleted: {summary.images_deleted}")
     if summary.warnings:
         print(f"- Warnings: {summary.warnings}")
 
