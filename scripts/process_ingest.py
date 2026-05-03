@@ -245,9 +245,17 @@ def process_one(
     date = m.group("date")
 
     transcript_dest = transcripts_dir / f"{date} ingest.md"
+    if transcript_dest.exists():
+        idx = 2
+        while True:
+            candidate = transcripts_dir / f"{date} ingest {idx}.md"
+            if not candidate.exists():
+                transcript_dest = candidate
+                break
+            idx += 1
     archive_dest = processed_dir / f"{date} source.md"
     daily_note_path = daily_notes_dir / source_path.name
-    link_fragment = f"[[{date} ingest]]"
+    link_fragment = f"[[{transcript_dest.stem}]]"
 
     if not transcripts_dir.exists():
         summary.warnings += 1
@@ -256,16 +264,11 @@ def process_one(
         summary.warnings += 1
         print(f"[WARN] Missing directory: {processed_dir}")
 
-    # 1) Copy to Transcripts/YYYY-MM-DD ingest.md (skip if exists)
-    if transcript_dest.exists():
-        summary.transcript_skipped_exists += 1
-        if verbose:
-            print(f"[SKIP transcript exists] {transcript_dest}")
-    else:
-        summary.transcript_created += 1
-        if verbose:
-            print(f"[COPY] {source_path.name} -> {transcript_dest}")
-        if apply:
+    # 1) Copy to Transcripts/YYYY-MM-DD ingest[ N].md
+    summary.transcript_created += 1
+    if verbose:
+        print(f"[COPY] {source_path.name} -> {transcript_dest}")
+    if apply:
             transcript_dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source_path, transcript_dest)
             if imgur_client_id:
