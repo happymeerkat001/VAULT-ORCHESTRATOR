@@ -286,16 +286,14 @@ def process_one(
                 )
                 if replaced_text != transcript_text:
                     transcript_dest.write_text(replaced_text, encoding="utf-8")
-            # 4) Delete embedded image files from vault root (post-transfer + post-imgur)
-            source_text = source_path.read_text(encoding="utf-8", errors="ignore") if source_path.exists() else transcript_dest.read_text(encoding="utf-8", errors="ignore")
-            for embed_ref in EMBED_RE.findall(source_text):
-                img = _resolve_embed_image_path(vault_dir, embed_ref)
-                if img is None or img.parent != vault_dir:
-                    continue
-                summary.images_deleted += 1
-                if verbose:
-                    print(f"[DELETE image] {img.name}")
-                img.unlink()
+            # 4) Delete all image files from vault root (post-transfer + post-imgur)
+            _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".heic", ".webp", ".gif", ".tiff", ".tif", ".bmp"}
+            for f in vault_dir.glob("*"):
+                if f.is_file() and f.suffix.lower() in _IMAGE_EXTS:
+                    summary.images_deleted += 1
+                    if verbose:
+                        print(f"[DELETE image] {f.name}")
+                    f.unlink()
 
     # 2) Archive original to processed/ and always move source out of root
     if not source_path.exists():
