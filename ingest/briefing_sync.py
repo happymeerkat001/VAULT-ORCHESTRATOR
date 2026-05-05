@@ -49,10 +49,7 @@ DAILY_NOTES_PATH = VAULT_PATH / "Daily Notes"
 LOCAL_TIMEZONE = "America/Chicago"
 MAX_STARRED_EMAILS = 3
 BRIEFING_HEADER = "## Morning Briefing ☀️"
-STANDING_TO_THINK_ITEMS = [
-    "Huberman 5",
-    "No cell phone",
-]
+STANDING_TO_THINK_ITEMS = []
 # ─────────────────────────────────────────────────────────────────────────────
 
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
