@@ -247,8 +247,14 @@ def is_exportable_status(status: str) -> bool:
     return normalized.endswith("_COMPLETE") or normalized.endswith("_COMPLETED")
 
 
-def ensure_daily_note_link(daily_note_path: Path, transcript_title: str) -> None:
+def ensure_daily_note_link(
+    daily_note_path: Path,
+    transcript_title: str,
+    display_title: str | None = None,
+) -> None:
+    visible_title = (display_title or transcript_title).strip()
     link = f"[[Transcripts/{transcript_title}]]"
+    block = f"### {visible_title}\n{link}"
     daily_note_path.parent.mkdir(parents=True, exist_ok=True)
     if not daily_note_path.exists():
         daily_note_path.write_text("", encoding="utf-8")
@@ -256,7 +262,7 @@ def ensure_daily_note_link(daily_note_path: Path, transcript_title: str) -> None
     if link in content:
         return
 
-    to_append = f"\n{link}\n" if content and not content.endswith("\n") else f"{link}\n"
+    to_append = f"\n{block}\n" if content and not content.endswith("\n") else f"{block}\n"
     with daily_note_path.open("a", encoding="utf-8") as handle:
         handle.write(to_append)
 
@@ -309,7 +315,7 @@ def main() -> None:
             build_markdown(recording, transcript_text, transcript_source),
             encoding="utf-8",
         )
-        ensure_daily_note_link(daily_note_path, safe_title)
+        ensure_daily_note_link(daily_note_path, safe_title, title)
         written += 1
         print(f"[export] wrote {destination} source={transcript_source}")
 

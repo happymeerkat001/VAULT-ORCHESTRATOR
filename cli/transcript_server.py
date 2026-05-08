@@ -39,7 +39,6 @@ class TranscriptService:
     def __init__(self, output_dir: Path) -> None:
         self.output_dir = output_dir.expanduser()
         self.vault_root = self.output_dir.parent
-        self.daily_note_path = self.vault_root / "Daily Notes" / f"{date.today().isoformat()}.md"
         self.client: TranscriptClient | None = None
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -57,6 +56,7 @@ class TranscriptService:
         default_title = title.strip() if isinstance(title, str) and title.strip() else cleaned_url
         safe_title = sanitize_title(default_title)
         destination = self.output_dir / f"{safe_title}.md"
+        daily_note_path = self.vault_root / "Daily Notes" / f"{date.today().isoformat()}.md"
 
         transcript_text: str | None = None
         transcript_source = "transcript.lol"
@@ -88,7 +88,7 @@ class TranscriptService:
         )
         destination.write_text(markdown_content, encoding="utf-8")
         print(f"[transcript_server] wrote {destination.name}: has_description={bool(description)}, has_ai_summary={bool(ai_summary)}, md_includes_description={'## Description' in markdown_content}, md_includes_ai_summary={'## AI Summary' in markdown_content}")
-        ensure_daily_note_link(self.daily_note_path, safe_title)
+        ensure_daily_note_link(daily_note_path, safe_title, default_title)
 
         return {
             "status": "ok",
