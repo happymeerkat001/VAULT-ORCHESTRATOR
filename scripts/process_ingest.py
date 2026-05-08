@@ -26,7 +26,6 @@ EMBED_RE = re.compile(r"!\[\[([^\]]+\.(?:png|jpe?g))\]\]", re.IGNORECASE)
 class Summary:
     scanned: int = 0
     candidates: int = 0
-    star_prefix_renamed: int = 0
 
     transcript_created: int = 0
     transcript_skipped_exists: int = 0
@@ -232,31 +231,6 @@ def _recover_transcripts_and_links(
         summary.recovered_links_fixed += 1
 
 
-def sweep_star_prefix(
-    ingestion_dir: Path,
-    *,
-    apply: bool,
-    verbose: bool,
-    summary: Summary,
-) -> None:
-    if not ingestion_dir.exists():
-        if verbose:
-            print(f"[SKIP prefix missing dir] {ingestion_dir}")
-        return
-
-    for source_path in sorted(ingestion_dir.glob("*.md")):
-        if not source_path.is_file():
-            continue
-        if source_path.name.startswith("*"):
-            continue
-        dest_path = source_path.with_name(f"*{source_path.name}")
-        summary.star_prefix_renamed += 1
-        if verbose:
-            print(f"[PREFIX] {source_path.name} -> {dest_path.name}")
-        if apply:
-            source_path.rename(dest_path)
-
-
 def process_one(
     source_path: Path,
     *,
@@ -438,19 +412,11 @@ def main() -> int:
             summary=summary,
         )
 
-    sweep_star_prefix(
-        transcripts_dir,
-        apply=args.apply,
-        verbose=args.verbose,
-        summary=summary,
-    )
-
     print("")
     print("Summary")
     print(f"- Mode: {_describe_action(args.apply)}")
     print(f"- Scanned root .md: {summary.scanned}")
     print(f"- Candidates: {summary.candidates}")
-    print(f"- z.Ingestion files prefixed with *: {summary.star_prefix_renamed}")
     print(f"- Transcript created: {summary.transcript_created}")
     print(f"- Transcript skipped (exists): {summary.transcript_skipped_exists}")
     print(f"- Archived: {summary.archived}")
