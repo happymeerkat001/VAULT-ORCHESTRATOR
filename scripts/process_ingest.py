@@ -26,6 +26,7 @@ EMBED_RE = re.compile(r"!\[\[([^\]]+\.(?:png|jpe?g))\]\]", re.IGNORECASE)
 class Summary:
     scanned: int = 0
     candidates: int = 0
+    star_prefix_renamed: int = 0
 
     transcript_created: int = 0
     transcript_skipped_exists: int = 0
@@ -219,7 +220,7 @@ def _recover_transcripts_and_links(
         daily_note_path = daily_notes_dir / f"{date}.md"
         if not daily_note_path.exists():
             continue
-        old_link = f"[[Transcripts/{date}]]"
+        old_link = f"[[z.Ingestion/{date}]]"
         new_link = f"[[{dest_path.stem}]]"
         text = daily_note_path.read_text(encoding="utf-8", errors="ignore")
         if old_link not in text:
@@ -229,6 +230,31 @@ def _recover_transcripts_and_links(
         if apply:
             daily_note_path.write_text(text.replace(old_link, new_link), encoding="utf-8")
         summary.recovered_links_fixed += 1
+
+
+def sweep_star_prefix(
+    ingestion_dir: Path,
+    *,
+    apply: bool,
+    verbose: bool,
+    summary: Summary,
+) -> None:
+    if not ingestion_dir.exists():
+        if verbose:
+            print(f"[SKIP prefix missing dir] {ingestion_dir}")
+        return
+
+    for source_path in sorted(ingestion_dir.glob("*.md")):
+        if not source_path.is_file():
+            continue
+        if source_path.name.startswith("*"):
+            continue
+        dest_path = source_path.with_name(f"*{source_path.name}")
+        summary.star_prefix_renamed += 1
+        if verbose:
+            print(f"[PREFIX] {source_path.name} -> {dest_path.name}")
+        if apply:
+            source_path.rename(dest_path)
 
 
 def process_one(
@@ -248,11 +274,11 @@ def process_one(
         return
     date = m.group("date")
 
-    transcript_dest = transcripts_dir / f"{date} ingest.md"
+    transcript_dest = transcripts_dir / f"*{date} ingest.md"
     if transcript_dest.exists():
         idx = 2
         while True:
-            candidate = transcripts_dir / f"{date} ingest {idx}.md"
+            candidate = transcripts_dir / f"*{date} ingest {idx}.md"
             if not candidate.exists():
                 transcript_dest = candidate
                 break
@@ -268,7 +294,7 @@ def process_one(
         summary.warnings += 1
         print(f"[WARN] Missing directory: {processed_dir}")
 
-    # 1) Copy to Transcripts/YYYY-MM-DD ingest[ N].md
+    # 1) Copy to z.Ingestion/*YYYY-MM-DD ingest[ N].md
     summary.transcript_created += 1
     if verbose:
         print(f"[COPY] {source_path.name} -> {transcript_dest}")
@@ -339,7 +365,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Process YYYY-MM-DD.md files in the vault root by copying them to "
-            "Transcripts/YYYY-MM-DD ingest.md, archiving originals to processed/, "
+            "z.Ingestion/*YYYY-MM-DD ingest.md, archiving originals to processed/, "
             "and appending a [[YYYY-MM-DD ingest]] link to the matching Daily Notes entry."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -369,7 +395,7 @@ def main() -> int:
         "--recover",
         action="store_true",
         help=(
-            "Scan Transcripts/ for YYYY-MM-DD.md files, rename them to "
+            "Scan z.Ingestion/ for YYYY-MM-DD.md files, rename them to "
             "YYYY-MM-DD ingest.md, and fix matching daily note links."
         ),
     )
@@ -377,7 +403,7 @@ def main() -> int:
     imgur_client_id = _load_env().get("IMGUR_CLIENT_ID", "").strip()
 
     vault_dir = Path(args.vault_dir).expanduser().resolve()
-    transcripts_dir = vault_dir / "Transcripts"
+    transcripts_dir = vault_dir / "z.Ingestion"
     processed_dir = vault_dir / "processed"
     daily_notes_dir = vault_dir / "Daily Notes"
 
@@ -412,11 +438,19 @@ def main() -> int:
             summary=summary,
         )
 
+    sweep_star_prefix(
+        transcripts_dir,
+        apply=args.apply,
+        verbose=args.verbose,
+        summary=summary,
+    )
+
     print("")
     print("Summary")
     print(f"- Mode: {_describe_action(args.apply)}")
     print(f"- Scanned root .md: {summary.scanned}")
     print(f"- Candidates: {summary.candidates}")
+    print(f"- z.Ingestion files prefixed with *: {summary.star_prefix_renamed}")
     print(f"- Transcript created: {summary.transcript_created}")
     print(f"- Transcript skipped (exists): {summary.transcript_skipped_exists}")
     print(f"- Archived: {summary.archived}")

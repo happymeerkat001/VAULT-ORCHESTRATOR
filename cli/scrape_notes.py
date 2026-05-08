@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-scrape_notes.py - Archive date-named Obsidian vault root notes into Transcripts/.
+scrape_notes.py - Archive date-named Obsidian vault root notes into z.Ingestion/.
 
 This script looks for notes in the vault root that match exactly:
   YYYY-MM-DD.md
@@ -11,7 +11,7 @@ It extracts:
   - Remote image embeds: ![](https://...) or ![alt](https://...) (download + OCR)
 
 Then it writes a transcript markdown file into:
-  <vault-root>/Transcripts/<sanitized-title>.md
+  <vault-root>/z.Ingestion/*<sanitized-title>.md
 
 And moves the source note into:
   <vault-root>/processed/<original-name>.md (unique if needed)
@@ -53,7 +53,7 @@ SUPPORTED_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".tiff", ".bmp"}
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Archive YYYY-MM-DD.md notes in the Obsidian vault root into Transcripts/ with OCR.",
+        description="Archive YYYY-MM-DD.md notes in the Obsidian vault root into z.Ingestion/ with OCR.",
     )
     parser.add_argument(
         "--dry-run",
@@ -69,7 +69,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        help="Directory to write transcript markdown files into (default: <vault-root>/Transcripts)",
+        help="Directory to write transcript markdown files into (default: <vault-root>/z.Ingestion)",
     )
     parser.add_argument(
         "--force",
@@ -243,7 +243,7 @@ def extract_note_date(path: Path) -> str:
 def main() -> int:
     args = parse_args()
     vault_root = args.vault_root.expanduser()
-    output_dir = args.output_dir.expanduser() if args.output_dir else vault_root / "Transcripts"
+    output_dir = args.output_dir.expanduser() if args.output_dir else vault_root / "z.Ingestion"
     processed_dir = vault_root / "processed"
 
     date_files = find_date_only_files(vault_root)
@@ -265,7 +265,7 @@ def main() -> int:
         note_date = extract_note_date(note_path)
         note_title = note_path.stem
         safe_title = sanitize_title(note_title)
-        destination = output_dir / f"{safe_title}.md"
+        destination = output_dir / f"*{safe_title}.md"
 
         if destination.exists() and not args.force:
             skipped_existing += 1

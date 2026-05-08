@@ -55,7 +55,7 @@ class TranscriptService:
 
         default_title = title.strip() if isinstance(title, str) and title.strip() else cleaned_url
         safe_title = sanitize_title(default_title)
-        destination = self.output_dir / f"{safe_title}.md"
+        destination = self.output_dir / f"*{safe_title}.md"
         daily_note_path = self.vault_root / "Daily Notes" / f"{date.today().isoformat()}.md"
 
         transcript_text: str | None = None

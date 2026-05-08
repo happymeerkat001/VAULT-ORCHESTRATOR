@@ -48,7 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        help="Directory to write transcript markdown files into (default: <vault-root>/Transcripts)",
+        help="Directory to write transcript markdown files into (default: <vault-root>/z.Ingestion)",
     )
     return parser.parse_args()
 
@@ -221,7 +221,7 @@ def unique_invalid_processed_path(processed_dir: Path, original_name: str) -> Pa
 def main() -> None:
     args = parse_args()
     vault_root = args.vault_root.expanduser()
-    output_dir = args.output_dir.expanduser() if args.output_dir else vault_root / "Transcripts"
+    output_dir = args.output_dir.expanduser() if args.output_dir else vault_root / "z.Ingestion"
     processed_dir = vault_root / "processed"
     untitled_files = find_untitled_files(vault_root)
 
@@ -278,7 +278,7 @@ def main() -> None:
 
             metadata = fetch_youtube_metadata(video_id)
             safe_title = sanitize_title(metadata["title"])
-            destination = output_dir / f"{safe_title}.md"
+            destination = output_dir / f"*{safe_title}.md"
             daily_note_path = vault_root / "Daily Notes" / f"{date.today().isoformat()}.md"
             processed_path = unique_processed_path(processed_dir, source_file.name)
 
