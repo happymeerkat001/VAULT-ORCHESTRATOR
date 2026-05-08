@@ -1,5 +1,6 @@
 import os
 import re
+import time
 import base64
 import requests
 from dotenv import load_dotenv
@@ -16,10 +17,22 @@ VAULT_ROOT = os.path.expanduser("~/Library/Mobile Documents/iCloud~md~obsidian/D
 # Initialize Client
 client = Anthropic(api_key=MINIMAX_KEY, base_url=BASE_URL)
 
+def _read_icloud_file(path):
+    """Read file, retrying on iCloud file-provider locks (EDEADLK under launchd)."""
+    last_exc = None
+    for _ in range(5):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read()
+        except OSError as exc:
+            last_exc = exc
+            time.sleep(1)
+    raise last_exc
+
+
 def _process_note(note_path):
     print(f"Checking {os.path.basename(note_path)} for images...")
-    with open(note_path, "r") as f:
-        content = f.read()
+    content = _read_icloud_file(note_path)
 
     # Matches ![image](https://i.imgur.com/xyz.jpg) but NOT ![Processed]
     pattern = r'!\[image\]\((https://i\.imgur\.com/[a-zA-Z0-9]+\.(?:jpg|jpeg|png))\)'
@@ -57,8 +70,17 @@ def _process_note(note_path):
         except Exception as e:
             print(f"Error processing {img_url}: {e}")
 
-    with open(note_path, "w") as f:
-        f.write(content)
+    last_exc = None
+    for _ in range(10):
+        try:
+            with open(note_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            break
+        except OSError as exc:
+            last_exc = exc
+            time.sleep(0.5)
+    else:
+        raise last_exc or OSError(f"Unable to write {note_path}")
 
 def process_active_notes():
     # This script will scan your last 3 daily notes for Imgur links
@@ -74,7 +96,10 @@ def process_active_notes():
         for note_dir in candidate_dirs:
             note_path = os.path.join(note_dir, f"{date_str}.md")
             if os.path.exists(note_path):
-                _process_note(note_path)
+                try:
+                    _process_note(note_path)
+                except OSError as e:
+                    print(f"Skipping {note_path} (iCloud locked): {e}")
 
 if __name__ == "__main__":
     process_active_notes()

@@ -49,7 +49,6 @@ DAILY_NOTES_PATH = VAULT_PATH / "Daily Notes"
 LOCAL_TIMEZONE = "America/Chicago"
 MAX_STARRED_EMAILS = 3
 BRIEFING_HEADER = "## Morning Briefing ☀️"
-STANDING_TO_THINK_ITEMS = []
 # ─────────────────────────────────────────────────────────────────────────────
 
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -60,26 +59,20 @@ MINIMAX_URL = "https://api.minimaxi.chat/v1/chat/completions"
 
 EMAIL_SYSTEM_PROMPT = (
     "You are preparing a concise daily briefing in markdown for the user. "
-    "Output ONLY the content for two sections. Do not mention Slack anywhere. "
+    "Output ONLY the content for three sections. Do not mention Slack anywhere. "
     "Do not wrap output in code fences. Do not include a title or date header. "
     "All data is already provided in the JSON below — use only this data.\n\n"
-    "Section 1: '# To-Think 🧠' — reflections, learning items, ideas to ponder. "
+    "Section 1: '## To-Do ✅' — actionable tasks derived from calendar and emails. "
     "Each item is a markdown checkbox: '- [ ] item'.\n\n"
-    "If 'standingToThinkItems' is present, include every listed item exactly once "
-    "in To-Think as unchecked checklist items. Keep those items verbatim.\n\n"
-    "Section 2: '## To-Do ✅' — actionable tasks derived from calendar and emails. "
-    "Each item is a markdown checkbox: '- [ ] item'.\n\n"
-    "After To-Do, add '## Calendar 📅' listing events as bullets (not checkboxes) "
+    "Section 2: '## Calendar 📅' listing events as bullets (not checkboxes) "
     "with times in 12-hour format. The 'calendarDays' field tells you how many days "
     "of events are included. Group events by date with a bold date label "
     "(e.g. **Sunday 04/26**, **Monday 04/27**) when calendarDays > 1.\n\n"
     "If no calendar events exist, write exactly: 'No events scheduled.'\n\n"
-    "Then add '## Email Highlights 📧' with a one-line summary header "
+    "Section 3: '## Email Highlights 📧' with a one-line summary header "
     "'**Starred:** N emails' followed by checklist items. List only the top 3 starred emails "
     "present in the data — do not add any extras. If no starred emails exist, "
     "write exactly: 'No starred emails.'\n\n"
-    "If 'rolloverToThink' is present, include those unchecked items "
-    "in the To-Think section — do not drop them. "
     "If 'rolloverToDo' is present, include those unchecked items "
     "in the To-Do section — do not drop them. "
     "Never place rollover items in Calendar or Email Highlights.\n\n"
@@ -400,7 +393,11 @@ def write_briefing(date_str: str, markdown: str) -> Path:
         # Check for the main header or any partial briefing artifacts
         briefing_markers = (BRIEFING_HEADER, "## Calendar 📅", "## Email Highlights 📧", "## Today's Focus 🧐")
         if any(marker in existing for marker in briefing_markers):
-            print(f"[briefing_sync] briefing content already present in {out_path.name}, skipping.")
+            marker_positions = [existing.find(marker) for marker in briefing_markers if marker in existing]
+            start = min(pos for pos in marker_positions if pos >= 0)
+            updated = f"{existing[:start].rstrip()}\n\n{markdown}"
+            out_path.write_text(updated, encoding="utf-8")
+            print(f"[briefing_sync] replaced existing briefing content in {out_path.name}.")
             return out_path
         with open(out_path, "a", encoding="utf-8") as f:
             f.write(f"\n{markdown}")
@@ -462,10 +459,7 @@ def main() -> None:
         "calendarDays": lookahead,
         "calendar": calendar_data,
         "starredEmails": email_data,
-        "standingToThinkItems": STANDING_TO_THINK_ITEMS,
     }
-    if think_rollover:
-        payload["rolloverToThink"] = think_rollover
     if todo_rollover:
         payload["rolloverToDo"] = todo_rollover
 
@@ -476,7 +470,9 @@ def main() -> None:
         sys.exit(1)
 
     # 6. Write to Obsidian Daily Notes
-    markdown = f"{BRIEFING_HEADER}\n\n{ai_markdown.strip()}\n"
+    think_lines = "\n".join(think_rollover) + "\n" if think_rollover else ""
+    think_section = f"# To-Think 🧠\n{think_lines}"
+    markdown = f"{BRIEFING_HEADER}\n\n{think_section}\n{ai_markdown.strip()}\n"
     try:
         out_path = write_briefing(today, markdown)
         print(f"[briefing_sync] wrote to: {out_path}")
