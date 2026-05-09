@@ -278,7 +278,7 @@ def main() -> None:
 
             metadata = fetch_youtube_metadata(video_id)
             safe_title = sanitize_title(metadata["title"])
-            destination = output_dir / f"*{safe_title}.md"
+            destination = output_dir / f"{safe_title}.md"
             daily_note_path = vault_root / "Daily Notes" / f"{date.today().isoformat()}.md"
             processed_path = unique_processed_path(processed_dir, source_file.name)
 

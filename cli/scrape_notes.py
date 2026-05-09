@@ -11,7 +11,7 @@ It extracts:
   - Remote image embeds: ![](https://...) or ![alt](https://...) (download + OCR)
 
 Then it writes a transcript markdown file into:
-  <vault-root>/z.Ingestion/*<sanitized-title>.md
+  <vault-root>/z.Ingestion/<sanitized-title>.md
 
 And moves the source note into:
   <vault-root>/processed/<original-name>.md (unique if needed)
@@ -265,7 +265,7 @@ def main() -> int:
         note_date = extract_note_date(note_path)
         note_title = note_path.stem
         safe_title = sanitize_title(note_title)
-        destination = output_dir / f"*{safe_title}.md"
+        destination = output_dir / f"{safe_title}.md"
 
         if destination.exists() and not args.force:
             skipped_existing += 1

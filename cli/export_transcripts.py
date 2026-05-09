@@ -253,7 +253,7 @@ def ensure_daily_note_link(
     display_title: str | None = None,
 ) -> None:
     visible_title = (display_title or transcript_title).strip()
-    link = f"[[z.Ingestion/*{transcript_title}]]"
+    link = f"[[z.Ingestion/{transcript_title}]]"
     block = f"### {visible_title}\n{link}"
     daily_note_path.parent.mkdir(parents=True, exist_ok=True)
     if not daily_note_path.exists():
@@ -293,15 +293,14 @@ def main() -> None:
         title = coalesce_string(recording, "title", "name") or f"recording-{recording_id or 'unknown'}"
         status = extract_status(recording)
         safe_title = sanitize_title(title)
-        destination = output_dir / f"*{safe_title}.md"
+        destination = output_dir / f"{safe_title}.md"
 
         if not is_exportable_status(status):
             skipped_incomplete += 1
             print(f"[export] skip incomplete status={status} title={title}")
             continue
 
-        legacy_destination = output_dir / f"{safe_title}.md"
-        if destination.exists() or legacy_destination.exists():
+        if destination.exists():
             skipped_existing += 1
             print(f"[export] skip existing {destination.name}")
             continue
