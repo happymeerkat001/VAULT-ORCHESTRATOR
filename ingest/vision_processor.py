@@ -12,7 +12,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 # Config
 MINIMAX_KEY = os.getenv("MINIMAX_API_KEY")
 BASE_URL = "https://api.minimax.io/anthropic"
-VAULT_ROOT = os.path.expanduser("~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Neural-orchestrator")
+VAULT_ROOT = os.path.expanduser("~/Library/Mobile Documents/iCloud~md~obsidian/Documents/AI-Vault")
 
 # Initialize Client
 client = Anthropic(api_key=MINIMAX_KEY, base_url=BASE_URL)

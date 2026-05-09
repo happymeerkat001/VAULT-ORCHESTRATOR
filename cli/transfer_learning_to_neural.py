@@ -10,7 +10,7 @@ SOURCE_ROOT = Path(
     "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Learning Root"
 ).expanduser()
 TARGET_ROOT = Path(
-    "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Neural-orchestrator"
+    "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/AI-Vault"
 ).expanduser()
 
 # Parse keywords from terminal arguments
@@ -43,7 +43,7 @@ def main() -> None:
         copied += 1
         print(f"[{index}/{total}] Copied: {relative}")
 
-    print(f"\nSummary: {copied} file(s) successfully copied to Neural-orchestrator.")
+    print(f"\nSummary: {copied} file(s) successfully copied to AI-Vault.")
 
 
 if __name__ == "__main__":

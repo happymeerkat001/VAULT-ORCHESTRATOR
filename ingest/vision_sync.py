@@ -26,7 +26,7 @@ from pathlib import Path
 
 CREDENTIALS_PATH = Path("~/.config/anthropic/credentials").expanduser()
 VAULT_ROOT = Path(
-    "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Neural-orchestrator"
+    "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/AI-Vault"
 ).expanduser()
 SCANS_DIR = VAULT_ROOT / "Attachments/Scans"
 MODEL = "claude-3-5-sonnet-20241022"

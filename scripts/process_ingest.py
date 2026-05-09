@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 VAULT_DEFAULT = (
-    "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Neural-orchestrator"
+    "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/AI-Vault"
 )
 
 DATE_FILENAME_RE = re.compile(r"^(?P<date>\d{4}-\d{2}-\d{2})\.md$")

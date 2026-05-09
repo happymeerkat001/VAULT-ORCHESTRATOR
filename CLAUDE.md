@@ -60,10 +60,10 @@ All `~/.config/` files are JSON, chmod 600.
 ## Obsidian vault path
 
 ```
-~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Neural-orchestrator/
+~/Library/Mobile Documents/iCloud~md~obsidian/Documents/AI-Vault/
 ```
 
-Use the lowercase `Neural-orchestrator` path consistently. Daily notes land at `Daily Notes/YYYY-MM-DD.md`, and `briefing_sync.py` writes the morning briefing section into that same note.
+Use the `AI-Vault` path consistently. Daily notes land at `Daily Notes/YYYY-MM-DD.md`, and `briefing_sync.py` writes the morning briefing section into that same note.
 
 ## Token minimization
 

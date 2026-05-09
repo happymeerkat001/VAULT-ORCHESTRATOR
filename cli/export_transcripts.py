@@ -22,7 +22,7 @@ from pathlib import Path
 from transcribe import API_BASE_URL, TERMINAL_STATUSES, TranscriptClient, extract_status, load_env
 
 DEFAULT_OUTPUT_DIR = Path(
-    "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Neural-orchestrator/z.Ingestion"
+    "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/AI-Vault/z.Ingestion"
 ).expanduser()
 EXPORTABLE_STATUSES = TERMINAL_STATUSES | {
     "TRANSCRIPTION_COMPLETE",
