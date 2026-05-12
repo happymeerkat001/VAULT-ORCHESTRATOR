@@ -293,6 +293,7 @@ class TranscriptClient:
         language: str,
         media_type: str,
         source: str,
+        external_id: str | None = None,
     ) -> str:
         payload = {
             "title": title,
@@ -301,6 +302,8 @@ class TranscriptClient:
             "source": source,
             "sourceUrl": url,
         }
+        if external_id and external_id.strip():
+            payload["externalId"] = external_id.strip()
         data = self._json_request(
             f"{API_BASE_URL}/spaces/{self.space_id}/recordings",
             method="POST",
@@ -318,6 +321,26 @@ class TranscriptClient:
         if not isinstance(data, dict):
             raise RuntimeError(f"Unexpected recording response: {json.dumps(data)[:500]}")
         return data
+
+    def list_insights(self, recording_id: str) -> dict | list:
+        return self._json_request(
+            f"{API_BASE_URL}/spaces/{self.space_id}/recordings/{recording_id}/insights"
+        )
+
+    def create_insight(
+        self,
+        recording_id: str,
+        prompt_id: str,
+        tweak_query: str = "",
+    ) -> dict | list:
+        payload: dict[str, str] = {"promptId": prompt_id}
+        if tweak_query.strip():
+            payload["tweakQuery"] = tweak_query.strip()
+        return self._json_request(
+            f"{API_BASE_URL}/spaces/{self.space_id}/recordings/{recording_id}/insights",
+            method="POST",
+            payload=payload,
+        )
 
     def get_transcript(self, recording_id: str, fmt: str) -> str:
         status, raw, headers = self._request(
@@ -368,7 +391,11 @@ def extract_status(recording: dict) -> str:
     return "UNKNOWN"
 
 
-def wait_for_transcript(client: TranscriptClient, recording_id: str, fmt: str, timeout_seconds: int) -> str:
+def wait_for_recording_terminal(
+    client: TranscriptClient,
+    recording_id: str,
+    timeout_seconds: int,
+) -> dict:
     deadline = time.time() + timeout_seconds
     last_status = None
     while time.time() < deadline:
@@ -382,14 +409,16 @@ def wait_for_transcript(client: TranscriptClient, recording_id: str, fmt: str, t
             raise RuntimeError(f"Transcript.lol marked recording as failed: {json.dumps(recording)[:500]}")
 
         if status in TERMINAL_STATUSES:
-            return client.get_transcript(recording_id, fmt)
+            return recording
 
-        try:
-            return client.get_transcript(recording_id, fmt)
-        except RuntimeError:
-            time.sleep(POLL_INTERVAL_SECONDS)
+        time.sleep(POLL_INTERVAL_SECONDS)
 
-    raise RuntimeError(f"Timed out after {timeout_seconds}s waiting for transcript.")
+    raise RuntimeError(f"Timed out after {timeout_seconds}s waiting for recording.")
+
+
+def wait_for_transcript(client: TranscriptClient, recording_id: str, fmt: str, timeout_seconds: int) -> str:
+    wait_for_recording_terminal(client, recording_id, timeout_seconds)
+    return client.get_transcript(recording_id, fmt)
 
 
 def parse_args() -> argparse.Namespace:

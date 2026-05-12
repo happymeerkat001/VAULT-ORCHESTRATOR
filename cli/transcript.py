@@ -19,9 +19,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from export_transcripts import DEFAULT_OUTPUT_DIR, extract_youtube_id, sanitize_title
+from export_transcripts import DEFAULT_OUTPUT_DIR, sanitize_title
 from transcript_server import TranscriptService
-from youtube_summary import fetch_youtube_ai_summary
 
 
 @dataclass(frozen=True)
@@ -128,11 +127,9 @@ def main() -> int:
         url = (raw_url or "").strip()
         if not url:
             continue
-        video_id = extract_youtube_id(url)
         title, description = fetch_youtube_metadata(url)
-        ai_summary = fetch_youtube_ai_summary(video_id) if video_id else ""
         safe_title = sanitize_title(title or url)
-        response = service.save_from_url(url=url, title=title, description=description or "", ai_summary=ai_summary)
+        response = service.save_from_url(url=url, title=title, description=description or "", ai_summary="")
         results.append(
             TranscriptResult(
                 url=url,

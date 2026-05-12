@@ -29,7 +29,7 @@ from transcribe import (
     load_env,
     wait_for_transcript,
 )
-from youtube_summary import fetch_youtube_ai_summary
+from transcript_lol_summary import prepare_youtube_summary_context
 
 HOST = "127.0.0.1"
 PORT = 8765
@@ -40,6 +40,7 @@ class TranscriptService:
     def __init__(self, output_dir: Path) -> None:
         self.output_dir = output_dir.expanduser()
         self.vault_root = self.output_dir.parent
+        self.env = load_env()
         self.client: TranscriptClient | None = None
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -62,15 +63,27 @@ class TranscriptService:
         transcript_text: str | None = None
         transcript_source = "transcript.lol"
         source = detect_source(cleaned_url)
+        summary_context = None
 
         if source == "YOUTUBE":
             video_id = extract_youtube_id(cleaned_url)
             if video_id:
-                if not ai_summary.strip():
-                    ai_summary = fetch_youtube_ai_summary(video_id)
+                summary_context = prepare_youtube_summary_context(
+                    cleaned_url,
+                    default_title,
+                    env=self.env,
+                    client=self.client,
+                    timeout_seconds=FALLBACK_TIMEOUT_SECONDS,
+                )
+                if summary_context.client is not None:
+                    self.client = summary_context.client
+                ai_summary = summary_context.summary or ai_summary
                 transcript_text = fetch_youtube_transcript(video_id)
                 if transcript_text:
                     transcript_source = "YouTube captions"
+                elif summary_context and summary_context.client and summary_context.recording_id:
+                    transcript_text = summary_context.client.get_transcript(summary_context.recording_id, "text")
+                    transcript_source = "transcript.lol"
 
         if not transcript_text:
             transcript_text = self._fetch_from_transcript_lol(cleaned_url, default_title, source)

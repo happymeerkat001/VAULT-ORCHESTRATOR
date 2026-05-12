@@ -26,7 +26,8 @@ from export_transcripts import (
     fetch_youtube_transcript,
     sanitize_title,
 )
-from youtube_summary import fetch_youtube_ai_summary
+from transcript_lol_summary import prepare_youtube_summary_context
+from transcribe import load_env
 
 URL_PATTERN = re.compile(r"https?://[^\s)>\]]+")
 
@@ -55,7 +56,12 @@ def parse_args() -> argparse.Namespace:
 
 
 def find_untitled_files(vault_root: Path) -> list[Path]:
-    return sorted(path for path in vault_root.glob("Untitled*.md") if path.is_file())
+    paths: set[Path] = set()
+    for pattern in ("Untitled*.md", "New Note*.md"):
+        for path in vault_root.glob(pattern):
+            if path.is_file():
+                paths.add(path)
+    return sorted(paths)
 
 
 def extract_url_from_file(path: Path) -> str | None:
@@ -235,6 +241,7 @@ def main() -> None:
     vault_root = args.vault_root.expanduser()
     output_dir = args.output_dir.expanduser() if args.output_dir else vault_root / "z.Ingestion"
     processed_dir = vault_root / "processed"
+    env = load_env()
     untitled_files = find_untitled_files(vault_root)
 
     print(f"[archive] found {len(untitled_files)} untitled file(s) in {vault_root}")
@@ -289,7 +296,6 @@ def main() -> None:
                 continue
 
             metadata = fetch_youtube_metadata(video_id)
-            ai_summary = fetch_youtube_ai_summary(video_id)
             safe_title = sanitize_title(metadata["title"])
             prefixed_stem = f"*{safe_title}"
             destination = output_dir / f"{prefixed_stem}.md"
@@ -310,8 +316,19 @@ def main() -> None:
                     print(
                         f"[archive] would skip existing {destination.name}, "
                         f"would move {source_file.name} -> processed/{processed_path.name}"
-                    )
+                )
                 continue
+
+            summary_context = None
+            ai_summary = ""
+            if not args.dry_run:
+                summary_context = prepare_youtube_summary_context(
+                    source_url,
+                    metadata["title"],
+                    env=env,
+                    timeout_seconds=600,
+                )
+                ai_summary = summary_context.summary
 
             if args.dry_run:
                 print(
@@ -322,6 +339,8 @@ def main() -> None:
                 continue
 
             transcript_text = fetch_youtube_transcript(video_id, include_timestamps=True)
+            if not transcript_text and summary_context.client and summary_context.recording_id:
+                transcript_text = summary_context.client.get_transcript(summary_context.recording_id, "text")
             if not transcript_text:
                 raise RuntimeError("No transcript returned from YouTube captions.")
 
