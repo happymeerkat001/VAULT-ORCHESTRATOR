@@ -29,6 +29,7 @@ from transcribe import (
     load_env,
     wait_for_transcript,
 )
+from youtube_summary import fetch_youtube_ai_summary
 
 HOST = "127.0.0.1"
 PORT = 8765
@@ -65,6 +66,8 @@ class TranscriptService:
         if source == "YOUTUBE":
             video_id = extract_youtube_id(cleaned_url)
             if video_id:
+                if not ai_summary.strip():
+                    ai_summary = fetch_youtube_ai_summary(video_id)
                 transcript_text = fetch_youtube_transcript(video_id)
                 if transcript_text:
                     transcript_source = "YouTube captions"

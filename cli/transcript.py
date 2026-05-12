@@ -14,18 +14,14 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import subprocess
 import sys
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
 from export_transcripts import DEFAULT_OUTPUT_DIR, extract_youtube_id, sanitize_title
 from transcript_server import TranscriptService
-from transcribe import load_env
-
-MINIMAX_URL = "https://api.minimaxi.chat/v1/chat/completions"
+from youtube_summary import fetch_youtube_ai_summary
 
 
 @dataclass(frozen=True)
@@ -96,43 +92,6 @@ def fetch_youtube_metadata(url: str) -> tuple[str | None, str | None]:
     return title, description
 
 
-def generate_ai_summary(description: str, minimax_api_key: str) -> str:
-    """Generate a 2-3 sentence AI summary of the video description via MiniMax."""
-    body = json.dumps({
-        "model": "MiniMax-M2.7",
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are summarizing a YouTube video for an Obsidian note. "
-                    "Write 2-3 concise sentences describing what the video covers and its key takeaways. "
-                    "No markdown formatting, no bullet points. Plain prose only."
-                ),
-            },
-            {"role": "user", "content": f"Video description:\n\n{description[:3000]}"},
-        ],
-        "temperature": 0.3,
-    }).encode("utf-8")
-
-    req = urllib.request.Request(
-        MINIMAX_URL,
-        data=body,
-        method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {minimax_api_key}",
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        content = (data.get("choices") or [{}])[0].get("message", {}).get("content", "")
-        content = re.sub(r"<think>.*?</think>\s*", "", content, flags=re.DOTALL)
-        return content.strip()
-    except Exception:
-        return ""
-
-
 def append_transcript_links(note_path: Path, results: list[TranscriptResult]) -> None:
     if not note_path:
         return
@@ -164,18 +123,14 @@ def main() -> int:
     args = parse_args()
     service = TranscriptService(args.output_dir)
 
-    env = load_env()
-    minimax_api_key = env.get("MINIMAX_API_KEY", "").strip()
-
     results: list[TranscriptResult] = []
     for raw_url in args.urls:
         url = (raw_url or "").strip()
         if not url:
             continue
+        video_id = extract_youtube_id(url)
         title, description = fetch_youtube_metadata(url)
-        ai_summary = ""
-        if description and minimax_api_key:
-            ai_summary = generate_ai_summary(description, minimax_api_key)
+        ai_summary = fetch_youtube_ai_summary(video_id) if video_id else ""
         safe_title = sanitize_title(title or url)
         response = service.save_from_url(url=url, title=title, description=description or "", ai_summary=ai_summary)
         results.append(

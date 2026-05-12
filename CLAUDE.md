@@ -64,7 +64,7 @@ Every ingest script uses these idioms — match them when adding new sources:
 
 | Store | Contents |
 |-------|----------|
-| `.env` (repo root, gitignored) | `MINIMAX_API_KEY`, `ANTHROPIC_BASE_URL`, `HEDY_AI_API_KEY`, `IMGUR_CLIENT_ID`, `FIREBASE_API_KEY`, `Transcript.lol_Login`, `Transcript.lol_Password`, `GOOGLE_*` |
+| `.env` (repo root, gitignored) | `MINIMAX_API_KEY` for `briefing_sync.py`, `ANTHROPIC_BASE_URL`, `HEDY_AI_API_KEY`, `IMGUR_CLIENT_ID`, `FIREBASE_API_KEY`, `Transcript.lol_Login`, `Transcript.lol_Password`, `GOOGLE_*` |
 | `~/.config/vault-orchestrator/google_credentials` | Google OAuth2 tokens (refresh + access) |
 | `~/.config/mymemo/credentials` | MyMemo JWT + auth0 cookie |
 | `~/.config/anthropic/credentials` | Claude API key (vision_sync only) |
@@ -98,9 +98,9 @@ Three project slash commands live in `.claude/commands/`. Recreate them if missi
 
 | Command | File | Invokes |
 |---------|------|---------|
-| `/briefing` | `briefing_sync.py` | Fetch Google Calendar + Gmail → MiniMax → write today's daily note. Rolls over unchecked To-Do and To-Think items from yesterday. Adds prev/next nav links in frontmatter. |
-| `/transcript <url>` | `cli/transcript.py` | Save YouTube/media transcript as markdown into `z.Ingestion/`. No `*` prefix — run `/obsidian` after to add it. |
-| `/obsidian` | `scripts/process_ingest.py --apply --verbose` | Process vault root `YYYY-MM-DD.md` files: copy to `z.Ingestion/*YYYY-MM-DD ingest.md`, archive originals to `processed/`, append wikilinks to matching daily notes. Also uploads embedded images to Imgur. |
+| `/hedy` | `hedy.md` | Fetch Hedy API → write formatted items to daily note. Project-scoped (not global). |
+| `/transcript <url>` | `transcript.md` | Save YouTube/media transcript as markdown into `z.Ingestion/`. Pull YouTube summary text when present, then fall back to captions or `transcript.lol`. No `*` prefix — run `/obsidian` after to add it. |
+| `/obsidian` | `obsidian.md` | Process vault root `YYYY-MM-DD.md` files: copy to `z.Ingestion/*YYYY-MM-DD ingest.md`, archive originals to `processed/`, append wikilinks to matching daily notes. Also uploads embedded images to Imgur. |
 
 Each command file contains only: a one-line description, a fenced bash block, and error guidance.
 
