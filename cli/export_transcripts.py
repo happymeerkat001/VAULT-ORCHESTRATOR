@@ -235,6 +235,7 @@ def build_markdown(
         f"**Transcript source:** {transcript_source}\n\n"
         f"{optional_sections}"
         "---\n\n"
+        "## Transcript\n\n"
         f"{transcript_text.rstrip()}\n\n"
         f"#{today_tag}\n"
     )
