@@ -220,12 +220,16 @@ def build_markdown(
     today_tag = date.today().isoformat()
     description_text = description.strip()
     ai_summary_text = ai_summary.strip()
+    description_norm = re.sub(r"\s+", " ", description_text).strip().lower()
+    ai_summary_norm = re.sub(r"\s+", " ", ai_summary_text).strip().lower()
 
     optional_sections = ""
     if description_text:
         optional_sections += f"## Description\n\n{description_text}\n\n"
-    if ai_summary_text:
+    if ai_summary_text and ai_summary_norm != description_norm:
         optional_sections += f"## AI Summary\n\n{ai_summary_text}\n\n"
+
+    transcript_heading = "## YouTube Transcript" if "youtube" in transcript_source.lower() else "## Transcript"
 
     return (
         f"# {title}\n\n"
@@ -235,7 +239,7 @@ def build_markdown(
         f"**Transcript source:** {transcript_source}\n\n"
         f"{optional_sections}"
         "---\n\n"
-        "## Transcript\n\n"
+        f"{transcript_heading}\n\n"
         f"{transcript_text.rstrip()}\n\n"
         f"#{today_tag}\n"
     )
