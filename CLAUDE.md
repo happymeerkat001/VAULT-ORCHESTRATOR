@@ -19,6 +19,7 @@ python3 ingest/vision_sync.py
 
 # Archive pipeline (manual, run in order)
 python3 cli/archive_youtube.py          # archive bare YouTube URLs from Untitled*.md → z.Ingestion/
+python3 cli/daily_note_youtube.py       # archive bare YouTube URLs from Daily Notes/YYYY-MM-DD.md → z.Ingestion/
 python3 cli/scrape_notes.py             # archive date-named notes + OCR images → z.Ingestion/
 python3 scripts/process_ingest.py       # batch-OCR images in z.Ingestion/, upload to Imgur
 
