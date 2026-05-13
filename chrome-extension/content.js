@@ -1,10 +1,10 @@
 (() => {
-  const BUTTON_ID = "yt-obsidian-transcript-save";
+  const BUTTON_GROUP_ID = "yt-obsidian-transcript-save-group";
   const STATUS_ID = "yt-obsidian-transcript-status";
   const SERVER_URL = "http://localhost:8765/transcript";
 
   function createUi() {
-    if (document.getElementById(BUTTON_ID)) {
+    if (document.getElementById(BUTTON_GROUP_ID)) {
       return;
     }
 
@@ -14,25 +14,29 @@
     container.style.gap = "8px";
     container.style.marginLeft = "12px";
 
-    const button = document.createElement("button");
-    button.id = BUTTON_ID;
-    button.textContent = "Save Transcript";
-    button.style.padding = "8px 12px";
-    button.style.border = "1px solid #0f0f0f33";
-    button.style.borderRadius = "18px";
-    button.style.cursor = "pointer";
-    button.style.fontSize = "13px";
-    button.style.background = "#f2f2f2";
-    button.style.color = "#0f0f0f";
+    const buttonGroup = document.createElement("div");
+    buttonGroup.id = BUTTON_GROUP_ID;
+    buttonGroup.style.display = "inline-flex";
+    buttonGroup.style.alignItems = "stretch";
+
+    const buttons = [
+      createButton("📝 Transcript.lol", "full", {
+        borderRadius: "18px 0 0 18px",
+        borderRight: "none"
+      }),
+      createButton("▶ YouTube Only", "youtube", {
+        borderRadius: "0 18px 18px 0"
+      })
+    ];
 
     const status = document.createElement("span");
     status.id = STATUS_ID;
     status.style.fontSize = "12px";
     status.style.color = "#606060";
 
-    button.addEventListener("click", async () => {
+    async function handleSave(mode, clickedButton) {
       setStatus("Saving...", "#606060");
-      button.disabled = true;
+      setButtonsDisabled(buttons, true);
       try {
         const expandButton =
           document.querySelector("ytd-text-inline-expander tp-yt-paper-button#expand") ||
@@ -58,6 +62,7 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            mode,
             url: window.location.href,
             title: document.title.replace(/\s*-\s*YouTube\s*$/, "").trim(),
             description,
@@ -75,11 +80,17 @@
       } catch (error) {
         setStatus("✗ Start transcript_server.py first", "#c00");
       } finally {
-        button.disabled = false;
+        clickedButton.blur();
+        setButtonsDisabled(buttons, false);
       }
-    });
+    }
 
-    container.appendChild(button);
+    for (const button of buttons) {
+      button.addEventListener("click", () => handleSave(button.dataset.mode, button));
+      buttonGroup.appendChild(button);
+    }
+
+    container.appendChild(buttonGroup);
     container.appendChild(status);
 
     const host =
@@ -90,11 +101,35 @@
     }
   }
 
+  function createButton(label, mode, styleOverrides) {
+    const button = document.createElement("button");
+    button.dataset.mode = mode;
+    button.textContent = label;
+    button.style.padding = "8px 12px";
+    button.style.border = "1px solid #0f0f0f33";
+    button.style.cursor = "pointer";
+    button.style.fontSize = "13px";
+    button.style.background = "#f2f2f2";
+    button.style.color = "#0f0f0f";
+    button.style.lineHeight = "1.2";
+    button.style.whiteSpace = "nowrap";
+    Object.assign(button.style, styleOverrides);
+    return button;
+  }
+
   function setStatus(message, color) {
     const status = document.getElementById(STATUS_ID);
     if (!status) return;
     status.textContent = message;
     status.style.color = color;
+  }
+
+  function setButtonsDisabled(buttons, disabled) {
+    for (const button of buttons) {
+      button.disabled = disabled;
+      button.style.opacity = disabled ? "0.7" : "1";
+      button.style.cursor = disabled ? "default" : "pointer";
+    }
   }
 
   const observer = new MutationObserver(() => {

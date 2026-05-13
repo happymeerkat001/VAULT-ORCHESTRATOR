@@ -50,10 +50,14 @@ class TranscriptService:
         title: str | None,
         description: str = "",
         ai_summary: str = "",
+        mode: str = "full",
     ) -> dict[str, str]:
         cleaned_url = (url or "").strip()
         if not cleaned_url:
             raise ValueError("Missing required field: url")
+        normalized_mode = mode.strip().lower() if isinstance(mode, str) else "full"
+        if normalized_mode not in {"full", "youtube"}:
+            raise ValueError(f"Invalid mode: {mode}")
 
         default_title = title.strip() if isinstance(title, str) and title.strip() else cleaned_url
         safe_title = sanitize_title(default_title)
@@ -68,24 +72,30 @@ class TranscriptService:
         if source == "YOUTUBE":
             video_id = extract_youtube_id(cleaned_url)
             if video_id:
-                summary_context = prepare_youtube_summary_context(
-                    cleaned_url,
-                    default_title,
-                    env=self.env,
-                    client=self.client,
-                    timeout_seconds=FALLBACK_TIMEOUT_SECONDS,
-                )
-                if summary_context.client is not None:
-                    self.client = summary_context.client
-                ai_summary = summary_context.summary or ai_summary
                 transcript_text = fetch_youtube_transcript(video_id)
                 if transcript_text:
                     transcript_source = "YouTube captions"
-                elif summary_context and summary_context.client and summary_context.recording_id:
-                    transcript_text = summary_context.client.get_transcript(summary_context.recording_id, "text")
-                    transcript_source = "transcript.lol"
+                elif normalized_mode == "youtube":
+                    raise RuntimeError("No YouTube captions available for this video")
+
+                if normalized_mode == "full":
+                    summary_context = prepare_youtube_summary_context(
+                        cleaned_url,
+                        default_title,
+                        env=self.env,
+                        client=self.client,
+                        timeout_seconds=FALLBACK_TIMEOUT_SECONDS,
+                    )
+                    if summary_context.client is not None:
+                        self.client = summary_context.client
+                    ai_summary = summary_context.summary or ai_summary
+                    if not transcript_text and summary_context.client and summary_context.recording_id:
+                        transcript_text = summary_context.client.get_transcript(summary_context.recording_id, "text")
+                        transcript_source = "transcript.lol"
 
         if not transcript_text:
+            if normalized_mode == "youtube":
+                raise RuntimeError("YouTube-only mode is supported only for YouTube videos with captions")
             transcript_text = self._fetch_from_transcript_lol(cleaned_url, default_title, source)
             transcript_source = "transcript.lol"
 
@@ -110,6 +120,7 @@ class TranscriptService:
             "status": "ok",
             "path": str(destination),
             "source": transcript_source,
+            "mode": normalized_mode,
         }
 
     def _fetch_from_transcript_lol(self, url: str, title: str, source: str) -> str:
@@ -150,11 +161,13 @@ class Handler(BaseHTTPRequestHandler):
             title = body.get("title")
             description = body.get("description", "")
             ai_summary = body.get("ai_summary", "")
+            mode = body.get("mode", "full")
             result = self.service.save_from_url(
                 url,
                 title if isinstance(title, str) else None,
                 description if isinstance(description, str) else "",
                 ai_summary if isinstance(ai_summary, str) else "",
+                mode if isinstance(mode, str) else "full",
             )
             self._send_json(200, result)
         except ValueError as exc:
