@@ -39,7 +39,11 @@ import urllib.request
 from datetime import date as date_type
 from pathlib import Path
 
+from archive_youtube import fetch_youtube_metadata
+from daily_note_youtube import YOUTUBE_URL_RE
 from export_transcripts import DEFAULT_OUTPUT_DIR, ensure_daily_note_link, sanitize_title
+from export_transcripts import extract_youtube_id
+from transcript_server import TranscriptService
 
 
 SWIFT_OCR_SCRIPT = Path(__file__).resolve().parent / "ocr_vision.swift"
@@ -141,6 +145,23 @@ def extract_remote_images(content: str) -> list[str]:
             continue
         urls.append(url)
     return urls
+
+
+def extract_bare_youtube_urls(content: str) -> tuple[list[str], str]:
+    urls: list[str] = []
+    remaining_lines: list[str] = []
+
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped:
+            match = YOUTUBE_URL_RE.fullmatch(stripped)
+            if match:
+                urls.append(match.group(0))
+                continue
+        remaining_lines.append(line)
+
+    remaining_content = "\n".join(remaining_lines).strip()
+    return urls, remaining_content
 
 
 def ocr_image_file(image_path: Path) -> str:
@@ -260,6 +281,8 @@ def main() -> int:
     skipped_existing = 0
     failures = 0
     ocr_errors = 0
+    youtube_processed = 0
+    transcript_service: TranscriptService | None = None
 
     for note_path in date_files:
         note_date = extract_note_date(note_path)
@@ -267,19 +290,54 @@ def main() -> int:
         safe_title = sanitize_title(note_title)
         destination = output_dir / f"{safe_title}.md"
 
-        if destination.exists() and not args.force:
-            skipped_existing += 1
-            print(f"[scrape] skip existing {destination.name}")
-            continue
-
-        if args.dry_run:
-            print(f"[scrape] would write {destination.name} from {note_path.name}")
-            continue
-
         try:
             content = read_text_with_retry(note_path).strip()
-            local_images = extract_local_images(content, vault_root)
-            remote_images = extract_remote_images(content)
+            youtube_urls, remaining_content = extract_bare_youtube_urls(content)
+
+            if youtube_urls:
+                if args.dry_run:
+                    for url in youtube_urls:
+                        print(f"[scrape] would process YouTube URL from {note_path.name}: {url}")
+                else:
+                    if transcript_service is None:
+                        transcript_service = TranscriptService(output_dir)
+                    for url in youtube_urls:
+                        video_id = extract_youtube_id(url)
+                        if not video_id:
+                            raise RuntimeError(f"Invalid YouTube URL: {url}")
+                        metadata = fetch_youtube_metadata(video_id)
+                        transcript_service.save_from_url(
+                            url=url,
+                            title=metadata["title"],
+                            description=metadata["description"],
+                            mode="full",
+                            daily_note_path=vault_root / "Daily Notes" / f"{note_date}.md",
+                        )
+                        youtube_processed += 1
+                        print(f"[scrape] processed YouTube URL from {note_path.name}: {metadata['title']}")
+
+            if not remaining_content:
+                if args.dry_run:
+                    print(f"[scrape] would skip date ingest for {note_path.name}; YouTube URL(s) only")
+                    continue
+
+                processed_path = unique_processed_path(processed_dir, note_path.name)
+                shutil.move(str(note_path), str(processed_path))
+                moved += 1
+                print(f"[scrape] moved {note_path.name} -> processed/{processed_path.name}")
+                continue
+
+            if destination.exists() and not args.force:
+                skipped_existing += 1
+                print(f"[scrape] skip existing {destination.name}")
+                continue
+
+            if args.dry_run:
+                print(f"[scrape] would write {destination.name} from {note_path.name}")
+                continue
+
+            local_images = extract_local_images(remaining_content, vault_root)
+            remote_images = extract_remote_images(remaining_content)
 
             ocr_results: list[tuple[str, str]] = []
             had_transient_error = False
@@ -316,7 +374,7 @@ def main() -> int:
                 continue
 
             destination.write_text(
-                build_note_markdown(note_title, note_date, content, ocr_results),
+                build_note_markdown(note_title, note_date, remaining_content, ocr_results),
                 encoding="utf-8",
             )
 
@@ -336,7 +394,7 @@ def main() -> int:
     print(
         "[scrape] summary: "
         f"written={written} moved={moved} skipped_existing={skipped_existing} "
-        f"ocr_errors={ocr_errors} failures={failures}"
+        f"youtube_processed={youtube_processed} ocr_errors={ocr_errors} failures={failures}"
     )
     return 0 if failures == 0 else 1
 

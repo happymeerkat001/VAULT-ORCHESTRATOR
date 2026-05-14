@@ -17,14 +17,20 @@ python3 ingest/briefing_sync.py
 python3 ingest/mymemo_sync.py
 python3 ingest/vision_sync.py
 
-# Archive pipeline (manual, run in order)
-python3 cli/archive_youtube.py          # archive bare YouTube URLs from Untitled*.md → z.Ingestion/
-python3 cli/daily_note_youtube.py       # archive bare YouTube URLs from Daily Notes/YYYY-MM-DD.md → z.Ingestion/
-python3 cli/scrape_notes.py             # archive date-named notes + OCR images → z.Ingestion/
-python3 scripts/process_ingest.py       # batch-OCR images in z.Ingestion/, upload to Imgur
+# Archive pipeline (manual via shell orchestrator)
+bash cli/run_archive.sh              # runs: archive_youtube.py → daily_note_youtube.py → scrape_notes.py
 
-# Transcript ingestion
-python3 cli/transcript.py <URL> [--output-dir <dir>] [--append-links-to-note <note_path>]
+# Individual archive steps (if needed)
+python3 cli/archive_youtube.py          # bare YouTube URLs from Untitled*.md → z.Ingestion/
+python3 cli/daily_note_youtube.py       # bare YouTube URLs from Daily Notes/YYYY-MM-DD.md → z.Ingestion/
+python3 cli/scrape_notes.py             # date-named notes + YouTube URLs + OCR images → z.Ingestion/
+
+# Transcript.lol integration
+python3 cli/export_transcripts.py [--dry-run] [--output-dir <dir>]  # export completed Transcript.lol recordings
+python3 cli/transcribe.py <URL> [--test-auth]                       # submit URL, print transcript
+
+# Post-processing
+python3 scripts/process_ingest.py       # batch-OCR images in z.Ingestion/, upload to Imgur
 
 # Cross-vault transfer (keywords are positional args)
 python3 cli/transfer_learning_to_neural.py --keywords "python" "AI" "LLM"
@@ -65,12 +71,12 @@ Every ingest script uses these idioms — match them when adding new sources:
 
 | Store | Contents |
 |-------|----------|
-| `.env` (repo root, gitignored) | `MINIMAX_API_KEY` for `briefing_sync.py`, `ANTHROPIC_BASE_URL`, `HEDY_AI_API_KEY`, `IMGUR_CLIENT_ID`, `FIREBASE_API_KEY`, `TRANSCRIPT_LOL_SUMMARY_PROMPT_ID`, `TRANSCRIPT_LOL_SUMMARY_TWEAK`, `Transcript.lol_Login`, `Transcript.lol_Password`, `GOOGLE_*` |
+| `.env` (repo root, gitignored) | `MINIMAX_API_KEY`, `ANTHROPIC_BASE_URL`, `HEDY_AI_API_KEY`, `IMGUR_CLIENT_ID`, `FIREBASE_API_KEY`, `TRANSCRIPT_LOL_SPACE_ID`, `TRANSCRIPT_LOL_API_KEY`, `TRANSCRIPT_LOL_SUMMARY_PROMPT_ID`, `TRANSCRIPT_LOL_SUMMARY_TWEAK`, `Transcript.lol_Login`, `Transcript.lol_Password`, `TRANSCRIPT_LOL_AUTH_TOKEN`, `TRANSCRIPT_LOL_SESSION_COOKIE`, `GOOGLE_*` |
 | `~/.config/vault-orchestrator/google_credentials` | Google OAuth2 tokens (refresh + access) |
 | `~/.config/mymemo/credentials` | MyMemo JWT + auth0 cookie |
 | `~/.config/anthropic/credentials` | Claude API key (vision_sync only) |
 
-All `~/.config/` files are JSON, chmod 600. `ANTHROPIC_BASE_URL` points to MiniMax's Anthropic-compatible proxy — not the real Anthropic endpoint.
+All `~/.config/` files are JSON, chmod 600. `ANTHROPIC_BASE_URL` points to MiniMax's Anthropic-compatible proxy. Transcript.lol auth supports multiple methods: `SPACE_ID + API_KEY` (preferred), `AUTH_TOKEN`, `SESSION_COOKIE`, or login/password flow with `FIREBASE_API_KEY`.
 
 ## Scheduling
 
