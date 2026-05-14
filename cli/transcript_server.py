@@ -137,13 +137,17 @@ class TranscriptService:
         if self.client is None:
             self.client = TranscriptClient(load_env())
             self.client.authenticate()
-        recording_id = self.client.create_recording(
-            url=url,
-            title=title,
-            language="en",
-            media_type=detect_media_type(source),
-            source=source,
-        )
+        recording_id = self.client.find_recording_by_url(url)
+        if recording_id:
+            print(f"[transcribe] reusing existing recording {recording_id}")
+        else:
+            recording_id = self.client.create_recording(
+                url=url,
+                title=title,
+                language="en",
+                media_type=detect_media_type(source),
+                source=source,
+            )
         return wait_for_transcript(
             self.client,
             recording_id,

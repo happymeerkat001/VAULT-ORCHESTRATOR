@@ -81,6 +81,73 @@ def load_env() -> dict[str, str]:
     return values
 
 
+def extract_youtube_id(url: str) -> str | None:
+    if not url:
+        return None
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.netloc.lower().removeprefix("www.")
+    path = parsed.path.strip("/")
+
+    if host in {"youtube.com", "m.youtube.com"}:
+        if path == "watch":
+            video_id = urllib.parse.parse_qs(parsed.query).get("v", [""])[0]
+            return video_id or None
+        if path.startswith("shorts/") or path.startswith("embed/") or path.startswith("live/"):
+            parts = path.split("/")
+            if len(parts) >= 2 and parts[1]:
+                return parts[1]
+    if host == "youtu.be":
+        parts = path.split("/")
+        if parts and parts[0]:
+            return parts[0]
+    return None
+
+
+def normalize_recordings_payload(payload: dict | list) -> list[dict]:
+    if isinstance(payload, list):
+        items = payload
+    elif isinstance(payload, dict):
+        for key in ("recordings", "items", "data", "results"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                items = value
+                break
+        else:
+            return []
+    else:
+        return []
+    return [item for item in items if isinstance(item, dict)]
+
+
+def urls_match(source_url: str, target_url: str) -> bool:
+    source_video_id = extract_youtube_id(source_url)
+    target_video_id = extract_youtube_id(target_url)
+    if source_video_id and target_video_id:
+        return source_video_id == target_video_id
+
+    source_parts = urllib.parse.urlsplit((source_url or "").strip())
+    target_parts = urllib.parse.urlsplit((target_url or "").strip())
+    normalized_source = urllib.parse.urlunsplit(
+        (
+            source_parts.scheme.lower(),
+            source_parts.netloc.lower(),
+            source_parts.path.rstrip("/"),
+            source_parts.query,
+            "",
+        )
+    )
+    normalized_target = urllib.parse.urlunsplit(
+        (
+            target_parts.scheme.lower(),
+            target_parts.netloc.lower(),
+            target_parts.path.rstrip("/"),
+            target_parts.query,
+            "",
+        )
+    )
+    return normalized_source == normalized_target
+
+
 class TranscriptClient:
     def __init__(self, env: dict[str, str]) -> None:
         self.env = env
@@ -324,6 +391,23 @@ class TranscriptClient:
             raise RuntimeError(f"Unexpected recording response: {json.dumps(data)[:500]}")
         return data
 
+    def find_recording_by_url(self, url: str) -> str | None:
+        cleaned_url = (url or "").strip()
+        if not cleaned_url:
+            return None
+
+        payload = self._json_request(f"{API_BASE_URL}/spaces/{self.space_id}/recordings")
+        for recording in normalize_recordings_payload(payload):
+            source_url = recording.get("sourceUrl", "")
+            recording_id = recording.get("id") or recording.get("recordingId")
+            if not isinstance(source_url, str) or not recording_id:
+                continue
+            if not urls_match(source_url, cleaned_url):
+                continue
+            if extract_status(recording) in TERMINAL_STATUSES:
+                return str(recording_id)
+        return None
+
     def list_insights(self, recording_id: str) -> dict | list:
         return self._json_request(
             f"{API_BASE_URL}/spaces/{self.space_id}/recordings/{recording_id}/insights"
@@ -468,15 +552,18 @@ def main() -> None:
 
     client = TranscriptClient(env)
     client.authenticate()
-
-    recording_id = client.create_recording(
-        url=args.url,
-        title=title,
-        language=args.language,
-        media_type=media_type,
-        source=source,
-    )
-    print(f"[transcribe] recording_id={recording_id}")
+    recording_id = client.find_recording_by_url(args.url)
+    if recording_id:
+        print(f"[transcribe] reusing existing recording {recording_id}")
+    else:
+        recording_id = client.create_recording(
+            url=args.url,
+            title=title,
+            language=args.language,
+            media_type=media_type,
+            source=source,
+        )
+        print(f"[transcribe] recording_id={recording_id}")
 
     transcript = wait_for_transcript(client, recording_id, args.format, args.timeout)
     sys.stdout.write(transcript)
