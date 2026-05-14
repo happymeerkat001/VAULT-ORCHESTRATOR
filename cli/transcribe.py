@@ -552,20 +552,27 @@ def main() -> None:
 
     client = TranscriptClient(env)
     client.authenticate()
-    recording_id = client.find_recording_by_url(args.url)
-    if recording_id:
-        print(f"[transcribe] reusing existing recording {recording_id}")
-    else:
-        recording_id = client.create_recording(
-            url=args.url,
-            title=title,
-            language=args.language,
-            media_type=media_type,
-            source=source,
-        )
-        print(f"[transcribe] recording_id={recording_id}")
+    try:
+        recording_id = client.find_recording_by_url(args.url)
+        if recording_id:
+            print(f"[transcribe] reusing existing recording {recording_id}")
+        else:
+            recording_id = client.create_recording(
+                url=args.url,
+                title=title,
+                language=args.language,
+                media_type=media_type,
+                source=source,
+            )
+            print(f"[transcribe] recording_id={recording_id}")
 
-    transcript = wait_for_transcript(client, recording_id, args.format, args.timeout)
+        transcript = wait_for_transcript(client, recording_id, args.format, args.timeout)
+    except Exception as exc:
+        if source == "VIMEO":
+            raise RuntimeError(
+                f"No Vimeo captions found; Transcript.lol media import failed. {exc}"
+            ) from exc
+        raise
     sys.stdout.write(transcript)
     if transcript and not transcript.endswith("\n"):
         sys.stdout.write("\n")

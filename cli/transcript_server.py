@@ -106,7 +106,14 @@ class TranscriptService:
         if not transcript_text:
             if normalized_mode == "youtube":
                 raise RuntimeError("YouTube-only mode is supported only for YouTube videos with captions")
-            transcript_text = self._fetch_from_transcript_lol(cleaned_url, default_title, source)
+            try:
+                transcript_text = self._fetch_from_transcript_lol(cleaned_url, default_title, source)
+            except Exception as exc:
+                if source == "VIMEO":
+                    raise RuntimeError(
+                        f"No Vimeo captions found; Transcript.lol media import failed. {exc}"
+                    ) from exc
+                raise
             transcript_source = "transcript.lol"
 
         metadata = {
