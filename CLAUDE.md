@@ -24,10 +24,12 @@ bash cli/run_archive.sh              # runs: archive_youtube.py → daily_note_y
 python3 cli/archive_youtube.py          # bare YouTube URLs from Untitled*.md → z.Ingestion/
 python3 cli/daily_note_youtube.py       # bare YouTube URLs from Daily Notes/YYYY-MM-DD.md → z.Ingestion/
 python3 cli/scrape_notes.py             # date-named notes + YouTube URLs + OCR images → z.Ingestion/
+python3 cli/reprocess_youtube_stubs.py  # URL-only z.Ingestion stubs → normal titled transcript notes
 
 # Transcript.lol integration
 python3 cli/export_transcripts.py [--dry-run] [--output-dir <dir>]  # export completed Transcript.lol recordings
-python3 cli/transcribe.py <URL> [--test-auth]                       # submit URL, print transcript
+python3 cli/transcribe.py <URL> [--test-auth]                       # print transcript; Vimeo tries captions first
+python3 cli/transcript.py <URL...> [--append-links-to-note <path>]  # save transcripts into z.Ingestion/
 
 # Post-processing
 python3 scripts/process_ingest.py       # batch-OCR images in z.Ingestion/, upload to Imgur
@@ -56,6 +58,29 @@ scripts/    Post-processing (process_ingest.py: image OCR + Imgur archival).
 Each ingest script is self-contained: fetch → format → write. The `deliver/` directory exists for convention but output is handled by `append_to_note()` defined inside each ingest script.
 
 Archive pipeline writes to `z.Ingestion/` in the vault. `process_ingest.py` runs after archival to OCR embedded images and replace local/remote links with Imgur-hosted URLs.
+
+### Important transcript examples
+
+Use these commands when validating transcript behavior:
+
+```bash
+# Vimeo public sample: should print captions directly, no Transcript.lol recording
+python3 -u cli/transcribe.py "https://vimeo.com/76979871"
+
+# Vimeo fallback case: no captions, should fall back to Transcript.lol and fail fast on MEDIA_IMPORT_FAILED
+python3 -u cli/transcribe.py "https://player.vimeo.com/video/1187098771?app_id=122963"
+
+# Save a Vimeo transcript into z.Ingestion/ using captions-first logic
+python3 cli/transcript.py "https://vimeo.com/76979871"
+
+# iPhone share flow: root YYYY-MM-DD.md with bare YouTube URLs
+python3 cli/scrape_notes.py --dry-run
+python3 cli/scrape_notes.py
+
+# Reprocess old URL-only ingest stubs
+python3 cli/reprocess_youtube_stubs.py --dry-run
+python3 cli/reprocess_youtube_stubs.py
+```
 
 ### Shared patterns
 
@@ -106,7 +131,7 @@ Three project slash commands live in `.claude/commands/`. Recreate them if missi
 | Command | File | Invokes |
 |---------|------|---------|
 | `/hedy` | `hedy.md` | Fetch Hedy API → write formatted items to daily note. Project-scoped (not global). |
-| `/transcript <url>` | `transcript.md` | Save YouTube/media transcript as markdown into `z.Ingestion/`. Use transcript.lol prompt summaries first, then captions, then `transcript.lol` transcript fallback. No `*` prefix — run `/obsidian` after to add it. |
+| `/transcript <url>` | `transcript.md` | Save media transcript as markdown into `z.Ingestion/`. YouTube prefers native captions before Transcript.lol fallback; Vimeo prefers yt-dlp captions before Transcript.lol fallback. No `*` prefix — run `/obsidian` after to add it. |
 | `/obsidian` | `obsidian.md` | Process vault root `YYYY-MM-DD.md` files: copy to `z.Ingestion/*YYYY-MM-DD ingest.md`, archive originals to `processed/`, append wikilinks to matching daily notes. Also uploads embedded images to Imgur. |
 
 Each command file contains only: a one-line description, a fenced bash block, and error guidance.

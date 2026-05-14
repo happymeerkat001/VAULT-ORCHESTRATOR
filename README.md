@@ -25,7 +25,9 @@ scripts/    Vault cleanup and post-processing helpers.
 |--------|--------|--------|
 | `ingest/briefing_sync.py` | Google Calendar + Gmail + MiniMax | Creates or updates `Daily Notes/YYYY-MM-DD.md` |
 | `cli/export_transcripts.py` | Transcript.lol recordings | Writes notes into `z.Ingestion/` and appends links into today's daily note |
-| `cli/transcribe.py` | Single URL via Transcript.lol | Prints transcript text to stdout |
+| `cli/transcribe.py` | Single media URL | Prints transcript text to stdout |
+| `cli/transcript.py` | One or more media URLs | Saves transcript markdown into `z.Ingestion/` |
+| `cli/scrape_notes.py` | Root-level `YYYY-MM-DD.md` notes | Archives note text/OCR and routes bare YouTube URLs into transcript saves |
 
 ## Setup
 
@@ -127,6 +129,73 @@ If you want to submit one URL to Transcript.lol manually and print the transcrip
 ```sh
 python3 cli/transcribe.py "https://www.youtube.com/watch?v=VIDEO_ID"
 ```
+
+## Important transcript examples
+
+### 1. Print one transcript to stdout
+
+YouTube still uses the existing Transcript.lol path:
+
+```sh
+python3 -u cli/transcribe.py "https://www.youtube.com/watch?v=VIDEO_ID"
+```
+
+Vimeo is captions-first. If Vimeo captions exist, the script prints them directly and does not create a Transcript.lol recording:
+
+```sh
+python3 -u cli/transcribe.py "https://vimeo.com/76979871"
+```
+
+If Vimeo captions do not exist, the script falls back to Transcript.lol. Failed imports now surface quickly because `_FAILED` statuses are treated as terminal failures:
+
+```sh
+python3 -u cli/transcribe.py \
+  "https://player.vimeo.com/video/1187098771?app_id=122963"
+```
+
+### 2. Save one transcript into the vault
+
+Save a URL as markdown in `z.Ingestion/`:
+
+```sh
+python3 cli/transcript.py "https://vimeo.com/76979871"
+```
+
+Append links into an existing note at the same time:
+
+```sh
+python3 cli/transcript.py \
+  --append-links-to-note "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/AI-Vault/AI Research Log.md" \
+  "https://www.youtube.com/watch?v=VIDEO_ID" \
+  "https://vimeo.com/76979871"
+```
+
+### 3. Process iPhone-shared daily notes with bare YouTube URLs
+
+If Obsidian creates a root-level `YYYY-MM-DD.md` containing bare YouTube URLs, `cli/scrape_notes.py` now routes each URL through `TranscriptService`, writes proper `*Title.md` files into `z.Ingestion/`, removes the URL lines from the date-ingest content, and skips the date-ingest file entirely when the note was only YouTube URLs.
+
+Preview what will happen:
+
+```sh
+python3 cli/scrape_notes.py --dry-run
+```
+
+Run the ingest:
+
+```sh
+python3 cli/scrape_notes.py
+```
+
+### 4. Reprocess old YouTube stub files
+
+If older `z.Ingestion/*.md` files contain only bare YouTube URLs, reprocess them into normal titled transcript notes:
+
+```sh
+python3 cli/reprocess_youtube_stubs.py --dry-run
+python3 cli/reprocess_youtube_stubs.py
+```
+
+The dry run should list each stub file and URL. The real run only deletes a stub after all URLs in that file succeed.
 
 ## Obsidian vault path
 

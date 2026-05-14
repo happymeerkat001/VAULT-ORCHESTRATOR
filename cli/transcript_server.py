@@ -22,6 +22,7 @@ from export_transcripts import (
     fetch_youtube_transcript,
     sanitize_title,
 )
+from media_captions import fetch_vimeo_captions
 from transcribe import (
     TranscriptClient,
     detect_media_type,
@@ -97,6 +98,10 @@ class TranscriptService:
                     if not transcript_text and summary_context.client and summary_context.recording_id:
                         transcript_text = summary_context.client.get_transcript(summary_context.recording_id, "text")
                         transcript_source = "transcript.lol"
+        elif source == "VIMEO":
+            transcript_text = fetch_vimeo_captions(cleaned_url, "en")
+            if transcript_text:
+                transcript_source = "Vimeo captions"
 
         if not transcript_text:
             if normalized_mode == "youtube":

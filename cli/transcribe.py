@@ -35,6 +35,8 @@ import urllib.request
 from http.cookiejar import CookieJar
 from pathlib import Path
 
+from media_captions import fetch_vimeo_captions
+
 ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 
 BASE_URL = "https://transcript.lol"
@@ -405,7 +407,7 @@ def wait_for_recording_terminal(
             print(f"[transcribe] status={status}")
             last_status = status
 
-        if status in FAILED_STATUSES:
+        if status in FAILED_STATUSES or status.endswith("_FAILED"):
             raise RuntimeError(f"Transcript.lol marked recording as failed: {json.dumps(recording)[:500]}")
 
         if status in TERMINAL_STATUSES:
@@ -440,11 +442,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     env = load_env()
-
-    client = TranscriptClient(env)
-    client.authenticate()
-
     if args.test_auth:
+        client = TranscriptClient(env)
+        client.authenticate()
         print(f"[transcribe] auth ok for space_id={client.space_id}")
         return
 
@@ -456,6 +456,18 @@ def main() -> None:
     title = args.title or derive_title(args.url)
 
     print(f"[transcribe] source={source} media_type={media_type} language={args.language}")
+
+    if source == "VIMEO":
+        transcript = fetch_vimeo_captions(args.url, args.language)
+        if transcript:
+            sys.stdout.write(transcript)
+            if not transcript.endswith("\n"):
+                sys.stdout.write("\n")
+            return
+        print("[transcribe] no Vimeo captions found; falling back to Transcript.lol")
+
+    client = TranscriptClient(env)
+    client.authenticate()
 
     recording_id = client.create_recording(
         url=args.url,

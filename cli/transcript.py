@@ -13,13 +13,11 @@ Optionally append links into a note:
 from __future__ import annotations
 
 import argparse
-import json
-import subprocess
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from export_transcripts import DEFAULT_OUTPUT_DIR, sanitize_title
+from media_captions import fetch_yt_dlp_metadata
 from transcript_server import TranscriptService
 
 
@@ -51,42 +49,14 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def fetch_youtube_metadata(url: str) -> tuple[str | None, str | None]:
-    """Return (title, description) for a YouTube URL via yt-dlp."""
-    video_id = extract_youtube_id(url)
-    if not video_id:
+def fetch_media_metadata(url: str) -> tuple[str | None, str | None]:
+    payload = fetch_yt_dlp_metadata(url)
+    if not payload:
         return None, None
 
-    watch_url = f"https://www.youtube.com/watch?v={video_id}"
-    cmd = [
-        sys.executable,
-        "-m",
-        "yt_dlp",
-        "--dump-single-json",
-        "--skip-download",
-        "--no-warnings",
-        watch_url,
-    ]
-    result = subprocess.run(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0 or not result.stdout.strip():
-        return None, None
-    try:
-        data = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        return None, None
-
-    if not isinstance(data, dict):
-        return None, None
-
-    title = data.get("title")
+    title = payload.get("title")
     title = title.strip() if isinstance(title, str) and title.strip() else None
-    description = data.get("description")
+    description = payload.get("description")
     description = description.strip() if isinstance(description, str) and description.strip() else None
     return title, description
 
@@ -127,7 +97,7 @@ def main() -> int:
         url = (raw_url or "").strip()
         if not url:
             continue
-        title, description = fetch_youtube_metadata(url)
+        title, description = fetch_media_metadata(url)
         safe_title = sanitize_title(title or url)
         response = service.save_from_url(url=url, title=title, description=description or "", ai_summary="")
         results.append(
