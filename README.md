@@ -153,7 +153,7 @@ python3 -u cli/transcribe.py \
   "https://player.vimeo.com/video/1187098771?app_id=122963"
 ```
 
-### 2. Save one transcript into the vault
+### 2. Save one transcript into the vault***
 
 Save a URL as markdown in `z.Ingestion/`:
 

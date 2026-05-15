@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import sys
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -169,7 +170,8 @@ def prepare_youtube_summary_context(
                 prompt_id,
                 tweak_query=tweak_query,
             )
-    except Exception:
+    except Exception as exc:
+        print(f"[transcript_lol_summary] warning: {exc}", file=sys.stderr, flush=True)
         recording_id = recording_id or None
 
     if not summary:

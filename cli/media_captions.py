@@ -147,11 +147,16 @@ def parse_webvtt(raw_text: str) -> str | None:
 
 def _build_language_order(language: str) -> list[str]:
     normalized = language.lower()
+    if normalized == "en":
+        return ["en", "en.*", "all"]
+    if normalized.startswith("en-"):
+        return [normalized, "en", "en.*", "all"]
+
     order = [normalized]
     if "-" in normalized:
-        order.append(normalized.split("-", 1)[0])
-    if "en" not in order:
-        order.append("en")
+        base_language = normalized.split("-", 1)[0]
+        if base_language not in order:
+            order.append(base_language)
     return order
 
 

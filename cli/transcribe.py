@@ -488,7 +488,7 @@ def wait_for_recording_terminal(
         recording = client.get_recording(recording_id)
         status = extract_status(recording)
         if status != last_status:
-            print(f"[transcribe] status={status}")
+            print(f"[transcribe] status={status}", flush=True)
             last_status = status
 
         if status in FAILED_STATUSES or status.endswith("_FAILED"):
