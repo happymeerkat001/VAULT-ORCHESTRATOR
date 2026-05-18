@@ -463,11 +463,20 @@ def main() -> None:
     if todo_rollover:
         payload["rolloverToDo"] = todo_rollover
 
+    minimax_failed = False
     try:
         ai_markdown = generate_briefing(payload, creds["minimax_api_key"])
     except Exception as exc:
         print(f"[ERROR] MiniMax generation failed: {exc}", file=sys.stderr)
-        sys.exit(1)
+        minimax_failed = True
+        todo_lines = "\n".join(todo_rollover) + "\n" if todo_rollover else ""
+        ai_markdown = (
+            "#degraded-sync\n\n"
+            "## Calendar 📅\n*(AI summary unavailable — re-run to generate)*\n\n"
+            "## Email Highlights 📧\n*(AI summary unavailable)*\n\n"
+            "## Today's Focus 🧐\n*(AI summary unavailable)*\n\n"
+            f"## To-Do ✅\n{todo_lines}"
+        )
 
     # 6. Write to Obsidian Daily Notes
     think_lines = "\n".join(think_rollover) + "\n" if think_rollover else ""
@@ -478,6 +487,9 @@ def main() -> None:
         print(f"[briefing_sync] wrote to: {out_path}")
     except OSError as exc:
         print(f"[ERROR] Failed to write file: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    if minimax_failed:
         sys.exit(1)
 
 
