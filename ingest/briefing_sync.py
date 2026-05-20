@@ -412,6 +412,13 @@ def main() -> None:
     print(f"[briefing_sync] date={today}")
     print(f"[briefing_sync] output_path={DAILY_NOTES_PATH / f'{today}.md'}")
 
+    # Ensure daily note exists even if OAuth or downstream API calls fail.
+    out_path = DAILY_NOTES_PATH / f"{today}.md"
+    if not out_path.exists():
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(build_note_preamble(today), encoding="utf-8")
+        print(f"[briefing_sync] created stub note: {out_path.name}")
+
     # 1. Load credentials
     try:
         creds = load_credentials()
