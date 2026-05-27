@@ -11,7 +11,9 @@ One-time setup:
        "google_client_id": "<GOOGLE_CLIENT_ID>",
        "google_client_secret": "<GOOGLE_CLIENT_SECRET>",
        "google_redirect_uri": "<GOOGLE_REDIRECT_URI>",
-       "google_refresh_token": "<GOOGLE_REFRESH_TOKEN>"
+       "google_refresh_token": "<GOOGLE_REFRESH_TOKEN>",
+       "weatherapi_com_key": "<WEATHERAPI_COM_KEY>",
+       "weather_location": "Austin,TX"
      }
      EOF
   3. chmod 600 ~/.config/vault-orchestrator/google_credentials
@@ -56,6 +58,90 @@ GOOGLE_CALENDAR_BASE_URL = "https://www.googleapis.com/calendar/v3/calendars"
 GOOGLE_CALENDAR_LIST_URL = "https://www.googleapis.com/calendar/v3/users/me/calendarList"
 GOOGLE_GMAIL_LIST_URL = "https://www.googleapis.com/gmail/v1/users/me/messages"
 MINIMAX_URL = "https://api.minimaxi.chat/v1/chat/completions"
+WEATHERAPI_FORECAST_URL = "http://api.weatherapi.com/v1/forecast.json"
+OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+
+WEATHER_EMOJI = {
+    1000: "☀️ ",   # Sunny/Clear
+    1003: "⛅",    # Partly cloudy
+    1006: "☁️ ",   # Cloudy
+    1009: "🌫️ ",  # Overcast
+    1030: "🌫️ ",  # Mist
+    1063: "🌦️ ",  # Patchy rain nearby
+    1066: "🌨️ ",  # Patchy snow nearby
+    1069: "🌨️ ",  # Patchy sleet nearby
+    1072: "🌧️ ",  # Patchy freezing drizzle
+    1087: "⛈️ ",  # Thundery outbreaks
+    1114: "🌨️ ",  # Blowing snow
+    1117: "❄️ ",  # Blizzard
+    1135: "🌫️ ",  # Fog
+    1147: "🌫️ ",  # Freezing fog
+    1150: "🌧️ ",  # Patchy light drizzle
+    1153: "🌧️ ",  # Light drizzle
+    1168: "🌧️ ",  # Freezing drizzle
+    1171: "🌧️ ",  # Heavy freezing drizzle
+    1180: "🌧️ ",  # Patchy light rain
+    1183: "🌧️ ",  # Light rain
+    1186: "🌧️ ",  # Moderate rain at times
+    1189: "🌧️ ",  # Moderate rain
+    1192: "🌧️ ",  # Heavy rain at times
+    1195: "🌧️ ",  # Heavy rain
+    1198: "🌧️ ",  # Light freezing rain
+    1201: "🌧️ ",  # Moderate or heavy freezing rain
+    1204: "🌨️ ",  # Light sleet
+    1207: "🌨️ ",  # Moderate or heavy sleet
+    1210: "🌨️ ",  # Patchy light snow
+    1213: "🌨️ ",  # Light snow
+    1216: "🌨️ ",  # Patchy moderate snow
+    1219: "🌨️ ",  # Moderate snow
+    1222: "🌨️ ",  # Patchy heavy snow
+    1225: "❄️ ",  # Heavy snow
+    1237: "🧊 ",  # Ice pellets
+    1240: "🌦️ ",  # Light rain shower
+    1243: "🌧️ ",  # Moderate or heavy rain shower
+    1246: "🌧️ ",  # Torrential rain shower
+    1249: "🌨️ ",  # Light sleet showers
+    1252: "🌨️ ",  # Moderate or heavy sleet showers
+    1255: "🌨️ ",  # Light snow showers
+    1258: "🌨️ ",  # Moderate or heavy snow showers
+    1261: "🧊 ",  # Light showers of ice pellets
+    1264: "🧊 ",  # Moderate or heavy showers of ice pellets
+    1273: "⛈️ ",  # Patchy light rain with thunder
+    1276: "⛈️ ",  # Moderate or heavy rain with thunder
+    1279: "⛈️ ",  # Patchy light snow with thunder
+    1282: "⛈️ ",  # Moderate or heavy snow with thunder
+}
+
+OPEN_METEO_WEATHER = {
+    0: ("Sunny", "☀️ "),
+    1: ("Mainly Sunny", "🌤️ "),
+    2: ("Partly Cloudy", "⛅"),
+    3: ("Cloudy", "☁️ "),
+    45: ("Fog", "🌫️ "),
+    48: ("Freezing Fog", "🌫️ "),
+    51: ("Light Drizzle", "🌧️ "),
+    53: ("Drizzle", "🌧️ "),
+    55: ("Heavy Drizzle", "🌧️ "),
+    56: ("Light Freezing Drizzle", "🌧️ "),
+    57: ("Freezing Drizzle", "🌧️ "),
+    61: ("Light Rain", "🌧️ "),
+    63: ("Rain", "🌧️ "),
+    65: ("Heavy Rain", "🌧️ "),
+    66: ("Light Freezing Rain", "🌧️ "),
+    67: ("Freezing Rain", "🌧️ "),
+    71: ("Light Snow", "🌨️ "),
+    73: ("Snow", "🌨️ "),
+    75: ("Heavy Snow", "❄️ "),
+    77: ("Snow Grains", "🌨️ "),
+    80: ("Light Rain Showers", "🌦️ "),
+    81: ("Rain Showers", "🌧️ "),
+    82: ("Heavy Rain Showers", "🌧️ "),
+    85: ("Snow Showers", "🌨️ "),
+    86: ("Heavy Snow Showers", "❄️ "),
+    95: ("Thunderstorm", "⛈️ "),
+    96: ("Thunderstorm With Hail", "⛈️ "),
+    99: ("Thunderstorm With Heavy Hail", "⛈️ "),
+}
 
 EMAIL_SYSTEM_PROMPT = (
     "You are preparing a concise daily briefing in markdown for the user. "
@@ -278,6 +364,138 @@ def fetch_starred_emails(access_token: str) -> dict:
     }
 
 
+def _fetch_json_url(url: str, timeout: int = 5) -> dict:
+    with urllib.request.urlopen(url, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _is_coordinate_location(location: str) -> bool:
+    return bool(re.match(r"^-?\d+(?:\.\d+)?,-?\d+(?:\.\d+)?$", location.strip()))
+
+
+def fetch_weather(api_key: str, location: str) -> tuple[dict | None, str | None]:
+    """Fetch a 3-day forecast, preferring WeatherAPI and falling back to Open-Meteo."""
+    params = urllib.parse.urlencode({
+        "key": api_key,
+        "q": location,
+        "days": 3,
+    })
+    try:
+        return _fetch_json_url(f"{WEATHERAPI_FORECAST_URL}?{params}"), "weatherapi"
+    except Exception as exc:
+        print(f"[WARN] WeatherAPI fetch failed: {exc}", file=sys.stderr)
+
+    if not _is_coordinate_location(location):
+        print("[WARN] Weather unavailable; Open-Meteo fallback requires lat,lon weather_location.", file=sys.stderr)
+        return None, None
+
+    latitude, longitude = [part.strip() for part in location.split(",", 1)]
+    backup_params = urllib.parse.urlencode({
+        "latitude": latitude,
+        "longitude": longitude,
+        "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max",
+        "temperature_unit": "fahrenheit",
+        "forecast_days": 3,
+        "timezone": LOCAL_TIMEZONE,
+    })
+    try:
+        return _fetch_json_url(f"{OPEN_METEO_FORECAST_URL}?{backup_params}"), "open-meteo"
+    except Exception as exc:
+        print(f"[WARN] Open-Meteo weather fetch failed: {exc}", file=sys.stderr)
+        return None, None
+
+
+def _fahrenheit_to_celsius(value: float | int | None) -> int | None:
+    if value is None:
+        return None
+    return round((float(value) - 32) * 5 / 9)
+
+
+def _format_temp(value: float | int | None, include_celsius: bool = False) -> str:
+    if value is None:
+        return "N/A"
+    fahrenheit = round(float(value))
+    if include_celsius:
+        celsius = _fahrenheit_to_celsius(fahrenheit)
+        return f"{fahrenheit}°F ({celsius}°C)"
+    return f"{fahrenheit}°F"
+
+
+def _weather_day_label(date_text: str, index: int) -> str:
+    try:
+        day = datetime.strptime(date_text, "%Y-%m-%d")
+        weekday = day.strftime("%a" if index < 2 else "%A")
+    except ValueError:
+        weekday = date_text
+
+    if index == 0:
+        return f"Today ({weekday})"
+    if index == 1:
+        return f"Tomorrow ({weekday})"
+    return weekday
+
+
+def _format_weatherapi(data: dict) -> str:
+    days = ((data.get("forecast") or {}).get("forecastday") or [])[:3]
+    lines = ["## Weather ☀️ "]
+
+    for index, item in enumerate(days):
+        date_text = item.get("date") or ""
+        day = item.get("day") or {}
+        condition = day.get("condition") or {}
+        condition_text = condition.get("text") or "Forecast unavailable"
+        condition_code = condition.get("code")
+        emoji = WEATHER_EMOJI.get(condition_code, "🌡️ ")
+        avg = day.get("avgtemp_f")
+        high = day.get("maxtemp_f")
+        low = day.get("mintemp_f")
+        rain = day.get("daily_chance_of_rain", 0)
+        label = _weather_day_label(date_text, index)
+        lines.append(
+            f"**{label}** — {emoji} {condition_text}, "
+            f"{_format_temp(avg, include_celsius=True)} "
+            f"↑{_format_temp(high)} ↓{_format_temp(low)}, {rain}% rain"
+        )
+
+    if len(lines) == 1:
+        lines.append("*(Weather data unavailable)*")
+    return "\n".join(lines) + "\n"
+
+
+def _format_open_meteo(data: dict) -> str:
+    daily = data.get("daily") or {}
+    dates = daily.get("time") or []
+    codes = daily.get("weather_code") or []
+    highs = daily.get("temperature_2m_max") or []
+    lows = daily.get("temperature_2m_min") or []
+    rain = daily.get("precipitation_probability_max") or []
+    lines = ["## Weather ☀️ "]
+
+    for index, date_text in enumerate(dates[:3]):
+        code = codes[index] if index < len(codes) else None
+        condition_text, emoji = OPEN_METEO_WEATHER.get(code, ("Forecast unavailable", "🌡️ "))
+        high = highs[index] if index < len(highs) else None
+        low = lows[index] if index < len(lows) else None
+        rain_chance = rain[index] if index < len(rain) else 0
+        avg = (float(high) + float(low)) / 2 if high is not None and low is not None else None
+        label = _weather_day_label(date_text, index)
+        lines.append(
+            f"**{label}** — {emoji} {condition_text}, "
+            f"{_format_temp(avg, include_celsius=True)} "
+            f"↑{_format_temp(high)} ↓{_format_temp(low)}, {rain_chance}% rain"
+        )
+
+    if len(lines) == 1:
+        lines.append("*(Weather data unavailable)*")
+    return "\n".join(lines) + "\n"
+
+
+def format_weather(data: dict, source: str) -> str:
+    if source == "open-meteo":
+        return _format_open_meteo(data)
+    return _format_weatherapi(data)
+
+
 def generate_briefing(payload: dict, minimax_api_key: str) -> str:
     user_content = "\n".join(EMAIL_USER_PROMPT_LINES) + "\n" + json.dumps(payload, indent=2)
 
@@ -391,7 +609,13 @@ def write_briefing(date_str: str, markdown: str) -> Path:
             existing = f"{preamble}\n{existing.lstrip()}"
             out_path.write_text(existing, encoding="utf-8")
         # Check for the main header or any partial briefing artifacts
-        briefing_markers = (BRIEFING_HEADER, "## Calendar 📅", "## Email Highlights 📧", "## Today's Focus 🧐")
+        briefing_markers = (
+            BRIEFING_HEADER,
+            "## Weather",
+            "## Calendar 📅",
+            "## Email Highlights 📧",
+            "## Today's Focus 🧐",
+        )
         if any(marker in existing for marker in briefing_markers):
             marker_positions = [existing.find(marker) for marker in briefing_markers if marker in existing]
             start = min(pos for pos in marker_positions if pos >= 0)
@@ -448,7 +672,19 @@ def main() -> None:
         print(f"[ERROR] Gmail fetch failed: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    # 4. Gather rollover items from yesterday
+    # 4. Fetch weather (optional and non-critical)
+    weather_markdown = ""
+    weather_key = creds.get("weatherapi_com_key", "")
+    if weather_key:
+        weather_location = creds.get("weather_location", "auto:ip")
+        weather_data, weather_source = fetch_weather(weather_key, weather_location)
+        if weather_data and weather_source:
+            weather_markdown = format_weather(weather_data, weather_source)
+            print(f"[briefing_sync] weather: fetched via {weather_source}")
+        else:
+            weather_markdown = "## Weather 🌡️ \n*(Weather data unavailable)*\n"
+
+    # 5. Gather rollover items from yesterday
     try:
         think_rollover, todo_rollover = get_yesterday_unchecked(today)
     except OSError as exc:
@@ -460,7 +696,7 @@ def main() -> None:
             f"{len(think_rollover)} To-Think, {len(todo_rollover)} To-Do unchecked item(s) from yesterday"
         )
 
-    # 5. Generate briefing
+    # 6. Generate briefing
     payload = {
         "date": today,
         "calendarDays": lookahead,
@@ -485,10 +721,10 @@ def main() -> None:
             f"## To-Do ✅\n{todo_lines}"
         )
 
-    # 6. Write to Obsidian Daily Notes
+    # 7. Write to Obsidian Daily Notes
     think_lines = "\n".join(think_rollover) + "\n" if think_rollover else ""
     think_section = f"# To-Think 🧠\n{think_lines}"
-    markdown = f"{BRIEFING_HEADER}\n\n{think_section}\n{ai_markdown.strip()}\n"
+    markdown = f"{BRIEFING_HEADER}\n\n{think_section}\n{weather_markdown}\n{ai_markdown.strip()}\n"
     try:
         out_path = write_briefing(today, markdown)
         print(f"[briefing_sync] wrote to: {out_path}")
