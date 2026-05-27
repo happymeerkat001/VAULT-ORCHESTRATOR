@@ -62,85 +62,85 @@ WEATHERAPI_FORECAST_URL = "http://api.weatherapi.com/v1/forecast.json"
 OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 
 WEATHER_EMOJI = {
-    1000: "☀️ ",   # Sunny/Clear
-    1003: "⛅",    # Partly cloudy
-    1006: "☁️ ",   # Cloudy
-    1009: "🌫️ ",  # Overcast
-    1030: "🌫️ ",  # Mist
-    1063: "🌦️ ",  # Patchy rain nearby
-    1066: "🌨️ ",  # Patchy snow nearby
-    1069: "🌨️ ",  # Patchy sleet nearby
-    1072: "🌧️ ",  # Patchy freezing drizzle
-    1087: "⛈️ ",  # Thundery outbreaks
-    1114: "🌨️ ",  # Blowing snow
-    1117: "❄️ ",  # Blizzard
-    1135: "🌫️ ",  # Fog
-    1147: "🌫️ ",  # Freezing fog
-    1150: "🌧️ ",  # Patchy light drizzle
-    1153: "🌧️ ",  # Light drizzle
-    1168: "🌧️ ",  # Freezing drizzle
-    1171: "🌧️ ",  # Heavy freezing drizzle
-    1180: "🌧️ ",  # Patchy light rain
-    1183: "🌧️ ",  # Light rain
-    1186: "🌧️ ",  # Moderate rain at times
-    1189: "🌧️ ",  # Moderate rain
-    1192: "🌧️ ",  # Heavy rain at times
-    1195: "🌧️ ",  # Heavy rain
-    1198: "🌧️ ",  # Light freezing rain
-    1201: "🌧️ ",  # Moderate or heavy freezing rain
-    1204: "🌨️ ",  # Light sleet
-    1207: "🌨️ ",  # Moderate or heavy sleet
-    1210: "🌨️ ",  # Patchy light snow
-    1213: "🌨️ ",  # Light snow
-    1216: "🌨️ ",  # Patchy moderate snow
-    1219: "🌨️ ",  # Moderate snow
-    1222: "🌨️ ",  # Patchy heavy snow
-    1225: "❄️ ",  # Heavy snow
-    1237: "🧊 ",  # Ice pellets
-    1240: "🌦️ ",  # Light rain shower
-    1243: "🌧️ ",  # Moderate or heavy rain shower
-    1246: "🌧️ ",  # Torrential rain shower
-    1249: "🌨️ ",  # Light sleet showers
-    1252: "🌨️ ",  # Moderate or heavy sleet showers
-    1255: "🌨️ ",  # Light snow showers
-    1258: "🌨️ ",  # Moderate or heavy snow showers
-    1261: "🧊 ",  # Light showers of ice pellets
-    1264: "🧊 ",  # Moderate or heavy showers of ice pellets
-    1273: "⛈️ ",  # Patchy light rain with thunder
-    1276: "⛈️ ",  # Moderate or heavy rain with thunder
-    1279: "⛈️ ",  # Patchy light snow with thunder
-    1282: "⛈️ ",  # Moderate or heavy snow with thunder
+    1000: "☀️",   # Sunny/Clear
+    1003: "⛅",   # Partly cloudy
+    1006: "☁️",   # Cloudy
+    1009: "🌫️",  # Overcast
+    1030: "🌫️",  # Mist
+    1063: "🌦️",  # Patchy rain nearby
+    1066: "🌨️",  # Patchy snow nearby
+    1069: "🌨️",  # Patchy sleet nearby
+    1072: "🌧️",  # Patchy freezing drizzle
+    1087: "⛈️",  # Thundery outbreaks
+    1114: "🌨️",  # Blowing snow
+    1117: "❄️",  # Blizzard
+    1135: "🌫️",  # Fog
+    1147: "🌫️",  # Freezing fog
+    1150: "🌧️",  # Patchy light drizzle
+    1153: "🌧️",  # Light drizzle
+    1168: "🌧️",  # Freezing drizzle
+    1171: "🌧️",  # Heavy freezing drizzle
+    1180: "🌧️",  # Patchy light rain
+    1183: "🌧️",  # Light rain
+    1186: "🌧️",  # Moderate rain at times
+    1189: "🌧️",  # Moderate rain
+    1192: "🌧️",  # Heavy rain at times
+    1195: "🌧️",  # Heavy rain
+    1198: "🌧️",  # Light freezing rain
+    1201: "🌧️",  # Moderate or heavy freezing rain
+    1204: "🌨️",  # Light sleet
+    1207: "🌨️",  # Moderate or heavy sleet
+    1210: "🌨️",  # Patchy light snow
+    1213: "🌨️",  # Light snow
+    1216: "🌨️",  # Patchy moderate snow
+    1219: "🌨️",  # Moderate snow
+    1222: "🌨️",  # Patchy heavy snow
+    1225: "❄️",  # Heavy snow
+    1237: "🧊",  # Ice pellets
+    1240: "🌦️",  # Light rain shower
+    1243: "🌧️",  # Moderate or heavy rain shower
+    1246: "🌧️",  # Torrential rain shower
+    1249: "🌨️",  # Light sleet showers
+    1252: "🌨️",  # Moderate or heavy sleet showers
+    1255: "🌨️",  # Light snow showers
+    1258: "🌨️",  # Moderate or heavy snow showers
+    1261: "🧊",  # Light showers of ice pellets
+    1264: "🧊",  # Moderate or heavy showers of ice pellets
+    1273: "⛈️",  # Patchy light rain with thunder
+    1276: "⛈️",  # Moderate or heavy rain with thunder
+    1279: "⛈️",  # Patchy light snow with thunder
+    1282: "⛈️",  # Moderate or heavy snow with thunder
 }
 
 OPEN_METEO_WEATHER = {
-    0: ("Sunny", "☀️ "),
-    1: ("Mainly Sunny", "🌤️ "),
+    0: ("Sunny", "☀️"),
+    1: ("Mainly Sunny", "🌤️"),
     2: ("Partly Cloudy", "⛅"),
-    3: ("Cloudy", "☁️ "),
-    45: ("Fog", "🌫️ "),
-    48: ("Freezing Fog", "🌫️ "),
-    51: ("Light Drizzle", "🌧️ "),
-    53: ("Drizzle", "🌧️ "),
-    55: ("Heavy Drizzle", "🌧️ "),
-    56: ("Light Freezing Drizzle", "🌧️ "),
-    57: ("Freezing Drizzle", "🌧️ "),
-    61: ("Light Rain", "🌧️ "),
-    63: ("Rain", "🌧️ "),
-    65: ("Heavy Rain", "🌧️ "),
-    66: ("Light Freezing Rain", "🌧️ "),
-    67: ("Freezing Rain", "🌧️ "),
-    71: ("Light Snow", "🌨️ "),
-    73: ("Snow", "🌨️ "),
-    75: ("Heavy Snow", "❄️ "),
-    77: ("Snow Grains", "🌨️ "),
-    80: ("Light Rain Showers", "🌦️ "),
-    81: ("Rain Showers", "🌧️ "),
-    82: ("Heavy Rain Showers", "🌧️ "),
-    85: ("Snow Showers", "🌨️ "),
-    86: ("Heavy Snow Showers", "❄️ "),
-    95: ("Thunderstorm", "⛈️ "),
-    96: ("Thunderstorm With Hail", "⛈️ "),
-    99: ("Thunderstorm With Heavy Hail", "⛈️ "),
+    3: ("Cloudy", "☁️"),
+    45: ("Fog", "🌫️"),
+    48: ("Freezing Fog", "🌫️"),
+    51: ("Light Drizzle", "🌧️"),
+    53: ("Drizzle", "🌧️"),
+    55: ("Heavy Drizzle", "🌧️"),
+    56: ("Light Freezing Drizzle", "🌧️"),
+    57: ("Freezing Drizzle", "🌧️"),
+    61: ("Light Rain", "🌧️"),
+    63: ("Rain", "🌧️"),
+    65: ("Heavy Rain", "🌧️"),
+    66: ("Light Freezing Rain", "🌧️"),
+    67: ("Freezing Rain", "🌧️"),
+    71: ("Light Snow", "🌨️"),
+    73: ("Snow", "🌨️"),
+    75: ("Heavy Snow", "❄️"),
+    77: ("Snow Grains", "🌨️"),
+    80: ("Light Rain Showers", "🌦️"),
+    81: ("Rain Showers", "🌧️"),
+    82: ("Heavy Rain Showers", "🌧️"),
+    85: ("Snow Showers", "🌨️"),
+    86: ("Heavy Snow Showers", "❄️"),
+    95: ("Thunderstorm", "⛈️"),
+    96: ("Thunderstorm With Hail", "⛈️"),
+    99: ("Thunderstorm With Heavy Hail", "⛈️"),
 }
 
 EMAIL_SYSTEM_PROMPT = (
@@ -437,7 +437,7 @@ def _weather_day_label(date_text: str, index: int) -> str:
 
 def _format_weatherapi(data: dict) -> str:
     days = ((data.get("forecast") or {}).get("forecastday") or [])[:3]
-    lines = ["## Weather ☀️ "]
+    lines = ["## Weather ☀️"]
 
     for index, item in enumerate(days):
         date_text = item.get("date") or ""
@@ -445,7 +445,7 @@ def _format_weatherapi(data: dict) -> str:
         condition = day.get("condition") or {}
         condition_text = condition.get("text") or "Forecast unavailable"
         condition_code = condition.get("code")
-        emoji = WEATHER_EMOJI.get(condition_code, "🌡️ ")
+        emoji = WEATHER_EMOJI.get(condition_code, "🌡️")
         avg = day.get("avgtemp_f")
         high = day.get("maxtemp_f")
         low = day.get("mintemp_f")
@@ -469,11 +469,11 @@ def _format_open_meteo(data: dict) -> str:
     highs = daily.get("temperature_2m_max") or []
     lows = daily.get("temperature_2m_min") or []
     rain = daily.get("precipitation_probability_max") or []
-    lines = ["## Weather ☀️ "]
+    lines = ["## Weather ☀️"]
 
     for index, date_text in enumerate(dates[:3]):
         code = codes[index] if index < len(codes) else None
-        condition_text, emoji = OPEN_METEO_WEATHER.get(code, ("Forecast unavailable", "🌡️ "))
+        condition_text, emoji = OPEN_METEO_WEATHER.get(code, ("Forecast unavailable", "🌡️"))
         high = highs[index] if index < len(highs) else None
         low = lows[index] if index < len(lows) else None
         rain_chance = rain[index] if index < len(rain) else 0

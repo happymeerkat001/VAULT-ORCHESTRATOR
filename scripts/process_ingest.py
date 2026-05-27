@@ -20,6 +20,9 @@ VAULT_DEFAULT = (
 DATE_FILENAME_RE = re.compile(r"^(?P<date>\d{4}-\d{2}-\d{2})\.md$")
 TRANSCRIPT_DATE_RE = re.compile(r"^(?P<date>\d{4}-\d{2}-\d{2})\.md$")
 EMBED_RE = re.compile(r"!\[\[([^\]]+\.(?:png|jpe?g))\]\]", re.IGNORECASE)
+YOUTUBE_ONLY_RE = re.compile(
+    r"https?://(?:www\.)?(?:youtube\.com/watch\?[^\s)>\]]+|youtu\.be/[^\s)>\]]+)"
+)
 
 
 @dataclass
@@ -81,6 +84,12 @@ def _append_line(path: Path, line: str, *, apply: bool) -> bool:
 
 def _describe_action(apply: bool) -> str:
     return "APPLY" if apply else "DRY-RUN"
+
+
+def _is_youtube_url_only(content: str) -> bool:
+    """Return True if every non-empty line is a bare YouTube URL."""
+    lines = [line.strip() for line in content.splitlines() if line.strip()]
+    return bool(lines) and all(YOUTUBE_ONLY_RE.fullmatch(line) for line in lines)
 
 
 def _next_duplicate_archive_path(processed_dir: Path, date: str) -> Path:
@@ -247,6 +256,12 @@ def process_one(
     if not m:
         return
     date = m.group("date")
+    content = source_path.read_text(encoding="utf-8", errors="ignore").strip()
+
+    if _is_youtube_url_only(content):
+        if verbose:
+            print(f"[SKIP youtube-only] {source_path.name} -> handled by scrape_notes.py")
+        return
 
     transcript_dest = transcripts_dir / f"*{date} ingest.md"
     if transcript_dest.exists():
