@@ -140,6 +140,24 @@ class TranscriptService:
             "mode": normalized_mode,
         }
 
+    def append_url_to_daily_note(self, url: str) -> dict[str, str]:
+        cleaned_url = (url or "").strip()
+        if not cleaned_url:
+            raise ValueError("Missing required field: url")
+
+        daily_note_path = self.vault_root / f"{date.today().isoformat()}.md"
+        daily_note_path.parent.mkdir(parents=True, exist_ok=True)
+        existing_content = (
+            daily_note_path.read_text(encoding="utf-8")
+            if daily_note_path.exists()
+            else ""
+        )
+        daily_note_path.write_text(
+            f"{existing_content.rstrip('\n')}\n{cleaned_url}\n",
+            encoding="utf-8",
+        )
+        return {"status": "ok"}
+
     def _fetch_from_transcript_lol(self, url: str, title: str, source: str) -> str:
         if self.client is None:
             self.client = TranscriptClient(load_env())
@@ -172,13 +190,17 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self) -> None:
-        if self.path != "/transcript":
+        if self.path not in {"/transcript", "/daily-note"}:
             self._send_json(404, {"status": "error", "message": "Not Found"})
             return
 
         try:
             body = self._read_json_body()
             url = str(body.get("url", "")).strip()
+            if self.path == "/daily-note":
+                self._send_json(200, self.service.append_url_to_daily_note(url))
+                return
+
             title = body.get("title")
             description = body.get("description", "")
             ai_summary = body.get("ai_summary", "")

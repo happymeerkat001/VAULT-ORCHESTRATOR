@@ -30,6 +30,7 @@ python3 cli/reprocess_youtube_stubs.py  # URL-only z.Ingestion stubs → normal 
 python3 cli/export_transcripts.py [--dry-run] [--output-dir <dir>]  # export completed Transcript.lol recordings
 python3 cli/transcribe.py <URL> [--test-auth]                       # print transcript; Vimeo tries captions first
 python3 cli/transcript.py <URL...> [--append-links-to-note <path>]  # save transcripts into z.Ingestion/
+python3 cli/transcript_server.py                                    # local Chrome extension bridge on port 8765
 
 # Post-processing
 python3 scripts/process_ingest.py       # batch-OCR images in z.Ingestion/, upload to Imgur
@@ -81,6 +82,15 @@ python3 cli/scrape_notes.py
 python3 cli/reprocess_youtube_stubs.py --dry-run
 python3 cli/reprocess_youtube_stubs.py
 ```
+
+### Chrome extension
+
+The Chrome extension lives in `chrome-extension/` and requires `python3 cli/transcript_server.py` running on port 8765.
+
+It adds two YouTube page buttons:
+
+- **📝 Transcript.lol** — appends the bare YouTube URL to the vault root `YYYY-MM-DD.md`, matching the iPhone share flow processed by `python3 cli/scrape_notes.py` / `/obsidian`.
+- **▶ YouTube Only** — calls `/transcript` for an immediate transcript save through the local server.
 
 ### Shared patterns
 

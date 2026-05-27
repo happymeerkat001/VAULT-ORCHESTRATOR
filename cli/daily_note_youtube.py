@@ -22,7 +22,7 @@ from export_transcripts import DEFAULT_OUTPUT_DIR, ensure_daily_note_link, extra
 from transcript_server import TranscriptService
 
 YOUTUBE_URL_RE = re.compile(
-    r"https?://(?:www\.)?(?:youtube\.com/watch\?[^\s)>\]]+|youtu\.be/[^\s)>\]]+)"
+    r"https?://(?:www\.)?(?:youtube\.com/(?:watch\?[^\s)>\]]+|shorts/[^\s)>\]]+|live/[^\s)>\]]+)|youtu\.be/[^\s)>\]]+)"
 )
 
 

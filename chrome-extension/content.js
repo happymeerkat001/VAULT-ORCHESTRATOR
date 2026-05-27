@@ -1,7 +1,8 @@
 (() => {
   const BUTTON_GROUP_ID = "yt-obsidian-transcript-save-group";
   const STATUS_ID = "yt-obsidian-transcript-status";
-  const SERVER_URL = "http://localhost:8765/transcript";
+  const TRANSCRIPT_URL = "http://localhost:8765/transcript";
+  const DAILY_NOTE_URL = "http://localhost:8765/daily-note";
 
   function createUi() {
     if (document.getElementById(BUTTON_GROUP_ID)) {
@@ -38,42 +39,29 @@
       setStatus("Saving...", "#606060");
       setButtonsDisabled(buttons, true);
       try {
-        const expandButton =
-          document.querySelector("ytd-text-inline-expander tp-yt-paper-button#expand") ||
-          document.querySelector("#description-inline-expander tp-yt-paper-button#expand") ||
-          document.querySelector("tp-yt-paper-button#expand");
-        if (expandButton instanceof HTMLElement) {
-          expandButton.click();
-          await new Promise((r) => setTimeout(r, 1000));
-        }
+        const request =
+          mode === "full"
+            ? {
+                endpoint: DAILY_NOTE_URL,
+                body: { url: window.location.href }
+              }
+            : {
+                endpoint: TRANSCRIPT_URL,
+                body: await buildTranscriptRequestBody(mode)
+              };
 
-        const description =
-          document.querySelector("#description-inner")?.innerText?.trim() ||
-          document.querySelector("#description")?.innerText?.trim() ||
-          document.querySelector('meta[name="description"]')?.content?.trim() ||
-          "";
-
-        const aiParas = [...document.querySelectorAll("p.videoSummaryContentViewModelParagraph")]
-          .map((p) => p.textContent?.trim())
-          .filter(Boolean);
-        const ai_summary = aiParas.join("\n\n");
-
-        const response = await fetch(SERVER_URL, {
+        const response = await fetch(request.endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            mode,
-            url: window.location.href,
-            title: document.title.replace(/\s*-\s*YouTube\s*$/, "").trim(),
-            description,
-            ai_summary
-          })
+          body: JSON.stringify(request.body)
         });
 
         const payload = await response.json().catch(() => ({}));
         if (!response.ok || payload.status !== "ok") {
           const message = payload.message || `HTTP ${response.status}`;
           setStatus(`✗ Error: ${message}`, "#c00");
+        } else if (mode === "full") {
+          setStatus("✓ Saved to note for Transcript.lol", "#0a7a0a");
         } else {
           setStatus(`✓ Saved (${payload.source || "transcript"})`, "#0a7a0a");
         }
@@ -115,6 +103,36 @@
     button.style.whiteSpace = "nowrap";
     Object.assign(button.style, styleOverrides);
     return button;
+  }
+
+  async function buildTranscriptRequestBody(mode) {
+    const expandButton =
+      document.querySelector("ytd-text-inline-expander tp-yt-paper-button#expand") ||
+      document.querySelector("#description-inline-expander tp-yt-paper-button#expand") ||
+      document.querySelector("tp-yt-paper-button#expand");
+    if (expandButton instanceof HTMLElement) {
+      expandButton.click();
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+
+    const description =
+      document.querySelector("#description-inner")?.innerText?.trim() ||
+      document.querySelector("#description")?.innerText?.trim() ||
+      document.querySelector('meta[name="description"]')?.content?.trim() ||
+      "";
+
+    const aiParas = [...document.querySelectorAll("p.videoSummaryContentViewModelParagraph")]
+      .map((p) => p.textContent?.trim())
+      .filter(Boolean);
+    const ai_summary = aiParas.join("\n\n");
+
+    return {
+      mode,
+      url: window.location.href,
+      title: document.title.replace(/\s*-\s*YouTube\s*$/, "").trim(),
+      description,
+      ai_summary
+    };
   }
 
   function setStatus(message, color) {
