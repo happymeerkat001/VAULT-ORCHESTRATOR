@@ -492,8 +492,10 @@ def _format_open_meteo(data: dict) -> str:
 
 def format_weather(data: dict, source: str) -> str:
     if source == "open-meteo":
-        return _format_open_meteo(data)
-    return _format_weatherapi(data)
+        body = _format_open_meteo(data)
+    else:
+        body = _format_weatherapi(data)
+    return body + "[Hourly forecast →](https://www.wunderground.com/hourly/us/tx/mckinney)\n"
 
 
 def generate_briefing(payload: dict, minimax_api_key: str) -> str:
@@ -724,7 +726,7 @@ def main() -> None:
     # 7. Write to Obsidian Daily Notes
     think_lines = "\n".join(think_rollover) + "\n" if think_rollover else ""
     think_section = f"# To-Think 🧠\n{think_lines}"
-    markdown = f"{BRIEFING_HEADER}\n\n{think_section}\n{weather_markdown}\n{ai_markdown.strip()}\n"
+    markdown = f"{BRIEFING_HEADER}\n\n{weather_markdown}\n{think_section}\n{ai_markdown.strip()}\n"
     try:
         out_path = write_briefing(today, markdown)
         print(f"[briefing_sync] wrote to: {out_path}")
