@@ -530,14 +530,19 @@ def generate_briefing(payload: dict, minimax_api_key: str) -> str:
     return content
 
 
-def read_text_with_retry(path: Path, attempts: int = 10, delay_s: float = 0.5) -> str:
+def read_text_with_retry(
+    path: Path,
+    attempts: int = 10,
+    initial_delay: float = 0.5,
+    max_delay: float = 4.0,
+) -> str:
     last_exc: Exception | None = None
-    for _ in range(max(1, attempts)):
+    for i in range(max(1, attempts)):
         try:
             return path.read_text(encoding="utf-8")
         except OSError as exc:
             last_exc = exc
-            time.sleep(delay_s)
+            time.sleep(min(initial_delay * 2**i, max_delay))
     raise last_exc or OSError(f"Unable to read {path}")
 
 
@@ -613,6 +618,7 @@ def write_briefing(date_str: str, markdown: str) -> Path:
         # Check for the main header or any partial briefing artifacts
         briefing_markers = (
             BRIEFING_HEADER,
+            "#degraded-sync",
             "## Weather",
             "## Calendar 📅",
             "## Email Highlights 📧",
@@ -687,10 +693,12 @@ def main() -> None:
             weather_markdown = "## Weather 🌡️ \n*(Weather data unavailable)*\n"
 
     # 5. Gather rollover items from yesterday
+    rollover_failed = False
     try:
         think_rollover, todo_rollover = get_yesterday_unchecked(today)
     except OSError as exc:
-        print(f"[WARN] Could not read yesterday's note for rollover: {exc}", file=sys.stderr)
+        print(f"[ERROR] Could not read yesterday's note for rollover: {exc}", file=sys.stderr)
+        rollover_failed = True
         think_rollover, todo_rollover = [], []
     if think_rollover or todo_rollover:
         print(
@@ -716,7 +724,6 @@ def main() -> None:
         minimax_failed = True
         todo_lines = "\n".join(todo_rollover) + "\n" if todo_rollover else ""
         ai_markdown = (
-            "#degraded-sync\n\n"
             "## Calendar 📅\n*(AI summary unavailable — re-run to generate)*\n\n"
             "## Email Highlights 📧\n*(AI summary unavailable)*\n\n"
             "## Today's Focus 🧐\n*(AI summary unavailable)*\n\n"
@@ -724,9 +731,13 @@ def main() -> None:
         )
 
     # 7. Write to Obsidian Daily Notes
-    think_lines = "\n".join(think_rollover) + "\n" if think_rollover else ""
-    think_section = f"# To-Think 🧠\n{think_lines}"
-    markdown = f"{BRIEFING_HEADER}\n\n{weather_markdown}\n{think_section}\n{ai_markdown.strip()}\n"
+    if rollover_failed:
+        think_section = "# To-Think 🧠\n*(Rollover from yesterday failed — re-run to retry)*\n"
+    else:
+        think_lines = "\n".join(think_rollover) + "\n" if think_rollover else ""
+        think_section = f"# To-Think 🧠\n{think_lines}"
+    degraded_tag = "#degraded-sync\n\n" if (rollover_failed or minimax_failed) else ""
+    markdown = f"{BRIEFING_HEADER}\n\n{degraded_tag}{weather_markdown}\n{think_section}\n{ai_markdown.strip()}\n"
     try:
         out_path = write_briefing(today, markdown)
         print(f"[briefing_sync] wrote to: {out_path}")
@@ -735,6 +746,8 @@ def main() -> None:
         sys.exit(1)
 
     if minimax_failed:
+        sys.exit(1)
+    if rollover_failed:
         sys.exit(1)
 
 
