@@ -17,6 +17,7 @@ Crontab (11:45 PM daily):
 No external dependencies — stdlib only.
 """
 
+import argparse
 import json
 import re
 import sys
@@ -182,7 +183,21 @@ def inject_success_callout(note_path: Path, count: int) -> None:
 
 
 def main() -> None:
-    today = today_local()
+    parser = argparse.ArgumentParser(description="Sync Hedy AI sessions to Obsidian")
+    parser.add_argument(
+        "--date", metavar="YYYY-MM-DD",
+        help="Pull sessions for a specific date instead of today",
+    )
+    args = parser.parse_args()
+
+    if args.date:
+        try:
+            datetime.strptime(args.date, "%Y-%m-%d")
+        except ValueError:
+            print(f"[ERROR] Invalid date format: {args.date} (expected YYYY-MM-DD)", file=sys.stderr)
+            sys.exit(1)
+
+    today = args.date or today_local()
     note_path = hedy_note_path(today)
     print(f"[hedy_sync] date={today}  note={note_path}")
 

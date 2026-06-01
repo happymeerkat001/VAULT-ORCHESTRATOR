@@ -24,6 +24,7 @@ scripts/    Vault cleanup and post-processing helpers.
 | Script | Source | Output |
 |--------|--------|--------|
 | `ingest/briefing_sync.py` | Google Calendar + Gmail + MiniMax | Creates or updates `Daily Notes/YYYY-MM-DD.md` |
+| `ingest/hedy_sync.py` | Hedy AI sessions API | Writes recaps + action items to `Hedy-AI/YYYY-MM-DD.md` |
 | `cli/export_transcripts.py` | Transcript.lol recordings | Writes notes into `z.Ingestion/` and appends links into today's daily note |
 | `cli/transcribe.py` | Single media URL | Prints transcript text to stdout |
 | `cli/transcript.py` | One or more media URLs | Saves transcript markdown into `z.Ingestion/` |
@@ -94,6 +95,31 @@ Manual verification:
 ```sh
 python3 ingest/briefing_sync.py
 ```
+
+## Hedy AI -> Obsidian vault
+
+Pull today's Hedy sessions (meeting recaps, action items, highlights) into daily notes:
+
+```sh
+python3 ingest/hedy_sync.py
+```
+
+Pull sessions for a specific past date (e.g. backfill missed days):
+
+```sh
+python3 ingest/hedy_sync.py --date 2026-05-28
+```
+
+That command:
+
+- Authenticates against `https://api.hedy.bot/sessions` using `HEDY_AI_API_KEY` from `.env`
+- Fetches the 10 most recent sessions, filters to today
+- Writes formatted recaps + to-dos into `Hedy-AI/YYYY-MM-DD.md`
+- Extracts transcripts into `Hedy-AI/transcript YYYY-MM-DD.md`
+- Auto-links keywords to vault pages via `KEYWORD_MAP`
+- Skips sessions already present (idempotent)
+
+Scheduling is handled by a LaunchAgent at `~/Library/LaunchAgents/com.leon.hedy-sync.plist` (daily at 5:30 AM).
 
 ## Transcript.lol -> Obsidian vault
 
