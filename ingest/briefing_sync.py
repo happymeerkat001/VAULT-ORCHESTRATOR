@@ -546,6 +546,24 @@ def read_text_with_retry(
     raise last_exc or OSError(f"Unable to read {path}")
 
 
+def write_text_with_retry(
+    path: Path,
+    content: str,
+    attempts: int = 10,
+    initial_delay: float = 0.5,
+    max_delay: float = 4.0,
+) -> None:
+    last_exc: Exception | None = None
+    for i in range(max(1, attempts)):
+        try:
+            path.write_text(content, encoding="utf-8")
+            return
+        except OSError as exc:
+            last_exc = exc
+            time.sleep(min(initial_delay * 2**i, max_delay))
+    raise last_exc or OSError(f"Unable to write {path}")
+
+
 def get_yesterday_unchecked(date_str: str) -> tuple[list[str], list[str]]:
     """Extract unchecked items only from To-Think and To-Do in yesterday's note."""
     if _HAS_ZONEINFO:
@@ -614,7 +632,7 @@ def write_briefing(date_str: str, markdown: str) -> Path:
         existing = read_text_with_retry(out_path)
         if not has_note_preamble(existing):
             existing = f"{preamble}\n{existing.lstrip()}"
-            out_path.write_text(existing, encoding="utf-8")
+            write_text_with_retry(out_path, existing)
         # Check for the main header or any partial briefing artifacts
         briefing_markers = (
             BRIEFING_HEADER,
@@ -628,13 +646,12 @@ def write_briefing(date_str: str, markdown: str) -> Path:
             marker_positions = [existing.find(marker) for marker in briefing_markers if marker in existing]
             start = min(pos for pos in marker_positions if pos >= 0)
             updated = f"{existing[:start].rstrip()}\n\n{markdown}"
-            out_path.write_text(updated, encoding="utf-8")
+            write_text_with_retry(out_path, updated)
             print(f"[briefing_sync] replaced existing briefing content in {out_path.name}.")
             return out_path
-        with open(out_path, "a", encoding="utf-8") as f:
-            f.write(f"\n{markdown}")
+        write_text_with_retry(out_path, existing + f"\n{markdown}")
     else:
-        out_path.write_text(f"{preamble}\n{markdown}", encoding="utf-8")
+        write_text_with_retry(out_path, f"{preamble}\n{markdown}")
 
     return out_path
 
@@ -648,7 +665,7 @@ def main() -> None:
     out_path = DAILY_NOTES_PATH / f"{today}.md"
     if not out_path.exists():
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(build_note_preamble(today), encoding="utf-8")
+        write_text_with_retry(out_path, build_note_preamble(today))
         print(f"[briefing_sync] created stub note: {out_path.name}")
 
     # 1. Load credentials
