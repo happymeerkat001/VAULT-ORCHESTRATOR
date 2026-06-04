@@ -112,6 +112,18 @@ def is_transient_lock_error(exc: Exception) -> bool:
     return False
 
 
+def write_text_with_retry(path: Path, content: str, attempts: int = 10, delay_s: float = 1.0) -> None:
+    last_exc: Exception | None = None
+    for _ in range(max(1, attempts)):
+        try:
+            path.write_text(content, encoding="utf-8")
+            return
+        except OSError as exc:
+            last_exc = exc
+            time.sleep(delay_s)
+    raise last_exc or OSError(f"Unable to write {path}")
+
+
 
 def find_date_only_files(vault_root: Path) -> list[Path]:
     matches: list[Path] = []
@@ -373,9 +385,9 @@ def main() -> int:
                 )
                 continue
 
-            destination.write_text(
+            write_text_with_retry(
+                destination,
                 build_note_markdown(note_title, note_date, remaining_content, ocr_results),
-                encoding="utf-8",
             )
 
             daily_note_path = vault_root / "Daily Notes" / f"{note_date}.md"

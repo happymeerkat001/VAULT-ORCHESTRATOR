@@ -9,6 +9,7 @@ Run:
 from __future__ import annotations
 
 import json
+import time
 from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -35,6 +36,29 @@ from transcript_lol_summary import prepare_youtube_summary_context
 HOST = "127.0.0.1"
 PORT = 8765
 FALLBACK_TIMEOUT_SECONDS = 600
+
+
+def read_text_with_retry(path: Path, attempts: int = 10, delay_s: float = 0.5) -> str:
+    last_exc: Exception | None = None
+    for _ in range(max(1, attempts)):
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError as exc:
+            last_exc = exc
+            time.sleep(delay_s)
+    raise last_exc or OSError(f"Unable to read {path}")
+
+
+def write_text_with_retry(path: Path, content: str, attempts: int = 10, delay_s: float = 1.0) -> None:
+    last_exc: Exception | None = None
+    for _ in range(max(1, attempts)):
+        try:
+            path.write_text(content, encoding="utf-8")
+            return
+        except OSError as exc:
+            last_exc = exc
+            time.sleep(delay_s)
+    raise last_exc or OSError(f"Unable to write {path}")
 
 
 class TranscriptService:
@@ -129,7 +153,7 @@ class TranscriptService:
             description=description,
             ai_summary=ai_summary,
         )
-        destination.write_text(markdown_content, encoding="utf-8")
+        write_text_with_retry(destination, markdown_content)
         print(f"[transcript_server] wrote {destination.name}: has_description={bool(description)}, has_ai_summary={bool(ai_summary)}, md_includes_description={'## Description' in markdown_content}, md_includes_ai_summary={'## AI Summary' in markdown_content}")
         ensure_daily_note_link(target_daily_note_path, f"*{safe_title}", default_title)
 
@@ -148,13 +172,13 @@ class TranscriptService:
         daily_note_path = self.vault_root / f"{date.today().isoformat()}.md"
         daily_note_path.parent.mkdir(parents=True, exist_ok=True)
         existing_content = (
-            daily_note_path.read_text(encoding="utf-8")
+            read_text_with_retry(daily_note_path)
             if daily_note_path.exists()
             else ""
         )
-        daily_note_path.write_text(
+        write_text_with_retry(
+            daily_note_path,
             f"{existing_content.rstrip('\n')}\n{cleaned_url}\n",
-            encoding="utf-8",
         )
         return {"status": "ok"}
 

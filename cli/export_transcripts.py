@@ -16,6 +16,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.parse
 from pathlib import Path
 
@@ -28,6 +29,42 @@ EXPORTABLE_STATUSES = TERMINAL_STATUSES | {
     "TRANSCRIPTION_COMPLETE",
     "TRANSCRIPT_COMPLETE",
 }
+
+
+def read_text_with_retry(path: Path, attempts: int = 10, delay_s: float = 0.5) -> str:
+    last_exc: Exception | None = None
+    for _ in range(max(1, attempts)):
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError as exc:
+            last_exc = exc
+            time.sleep(delay_s)
+    raise last_exc or OSError(f"Unable to read {path}")
+
+
+def write_text_with_retry(path: Path, content: str, attempts: int = 10, delay_s: float = 1.0) -> None:
+    last_exc: Exception | None = None
+    for _ in range(max(1, attempts)):
+        try:
+            path.write_text(content, encoding="utf-8")
+            return
+        except OSError as exc:
+            last_exc = exc
+            time.sleep(delay_s)
+    raise last_exc or OSError(f"Unable to write {path}")
+
+
+def append_text_with_retry(path: Path, content: str, attempts: int = 10, delay_s: float = 1.0) -> None:
+    last_exc: Exception | None = None
+    for _ in range(max(1, attempts)):
+        try:
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(content)
+            return
+        except OSError as exc:
+            last_exc = exc
+            time.sleep(delay_s)
+    raise last_exc or OSError(f"Unable to append to {path}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -262,14 +299,13 @@ def ensure_daily_note_link(
     block = f"### {visible_title}\n{link}"
     daily_note_path.parent.mkdir(parents=True, exist_ok=True)
     if not daily_note_path.exists():
-        daily_note_path.write_text("", encoding="utf-8")
-    content = daily_note_path.read_text(encoding="utf-8")
+        write_text_with_retry(daily_note_path, "")
+    content = read_text_with_retry(daily_note_path)
     if link in content:
         return
 
     to_append = f"\n{block}\n" if content and not content.endswith("\n") else f"{block}\n"
-    with daily_note_path.open("a", encoding="utf-8") as handle:
-        handle.write(to_append)
+    append_text_with_retry(daily_note_path, to_append)
 
 
 def main() -> None:
