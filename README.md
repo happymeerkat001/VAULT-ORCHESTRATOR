@@ -110,7 +110,8 @@ tail -f ~/.claude/logs/launchd-process-ingest.out.log
 Manual verification:
 
 ```sh
-python3 ingest/briefing_sync.py
+python3 ingest/briefing_sync.py              # today
+python3 ingest/briefing_sync.py --date 2026-06-04  # backfill a specific date
 ```
 
 If run fails with:

@@ -665,7 +665,11 @@ def write_briefing(date_str: str, markdown: str) -> Path:
 
 
 def main() -> None:
-    today = today_local()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--date", help="Date to generate briefing for (YYYY-MM-DD). Defaults to today.")
+    args = parser.parse_args()
+    today = args.date if args.date else today_local()
     print(f"[briefing_sync] date={today}")
     print(f"[briefing_sync] output_path={DAILY_NOTES_PATH / f'{today}.md'}")
 
