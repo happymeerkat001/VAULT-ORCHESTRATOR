@@ -248,8 +248,16 @@ def refresh_access_token(creds: dict) -> str:
         method="POST",
         headers={"Content-Type": "application/x-www-form-urlencoded"},
     )
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        if exc.code in (400, 401):
+            raise RuntimeError(
+                "Google OAuth refresh token expired or revoked. "
+                "Re-authorize by running: python3 cli/google_reauth.py"
+            ) from exc
+        raise
 
     if "access_token" not in data:
         raise RuntimeError(f"Token refresh failed: {data}")
@@ -678,8 +686,11 @@ def main() -> None:
     # 2. Refresh Google OAuth2 access token
     try:
         access_token = refresh_access_token(creds)
+    except RuntimeError as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        sys.exit(1)
     except Exception as exc:
-        print(f"[ERROR] Token refresh failed: {exc}", file=sys.stderr)
+        print(f"[ERROR] Google OAuth token refresh failed: {exc}", file=sys.stderr)
         sys.exit(1)
 
     # 3. Fetch data in sequence (stdlib has no async — keep it simple)

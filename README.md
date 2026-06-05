@@ -113,6 +113,18 @@ Manual verification:
 python3 ingest/briefing_sync.py
 ```
 
+If run fails with:
+
+```text
+[ERROR] Google OAuth refresh token expired or revoked. Re-authorize by running: python3 cli/google_reauth.py
+```
+
+refresh token is dead. Re-auth:
+
+```sh
+python3 cli/google_reauth.py
+```
+
 ## Hedy AI -> Obsidian vault
 
 Pull today's Hedy sessions (meeting recaps, action items, highlights) into daily notes:
@@ -281,7 +293,7 @@ python3 cli/transfer_learning_to_neural.py --keywords "python" "AI" "LLM"
 
 ## Re-authorize Google OAuth2
 
-If Google credentials expire:
+If Google credentials expire or `briefing_sync.py` prints refresh-token error:
 
 ```sh
 python3 cli/google_reauth.py
