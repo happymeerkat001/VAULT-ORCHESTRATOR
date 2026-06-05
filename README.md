@@ -223,7 +223,7 @@ Preview what will happen:
 python3 cli/scrape_notes.py --dry-run
 ```
 
-Run the ingest:
+Run the ingest for any root-level `YYYY-MM-DD.md`, including older backfill dates:
 
 ```sh
 python3 cli/scrape_notes.py
