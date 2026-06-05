@@ -176,6 +176,19 @@ def extract_bare_youtube_urls(content: str) -> tuple[list[str], str]:
     return urls, remaining_content
 
 
+def remove_succeeded_youtube_urls(content: str, succeeded_urls: set[str]) -> str:
+    if not succeeded_urls:
+        return content
+
+    remaining_lines: list[str] = []
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped in succeeded_urls and YOUTUBE_URL_RE.fullmatch(stripped):
+            continue
+        remaining_lines.append(line)
+    return "\n".join(remaining_lines).strip()
+
+
 def ocr_image_file(image_path: Path) -> str:
     """Use macOS Vision framework via Swift subprocess for local OCR."""
     result = subprocess.run(
@@ -294,6 +307,7 @@ def main() -> int:
     failures = 0
     ocr_errors = 0
     youtube_processed = 0
+    youtube_skipped = 0
     transcript_service: TranscriptService | None = None
 
     for note_path in date_files:
@@ -305,6 +319,8 @@ def main() -> int:
         try:
             content = read_text_with_retry(note_path).strip()
             youtube_urls, remaining_content = extract_bare_youtube_urls(content)
+            failed_urls: list[str] = []
+            succeeded_urls: list[str] = []
 
             if youtube_urls:
                 if args.dry_run:
@@ -314,23 +330,46 @@ def main() -> int:
                     if transcript_service is None:
                         transcript_service = TranscriptService(output_dir)
                     for url in youtube_urls:
-                        video_id = extract_youtube_id(url)
-                        if not video_id:
-                            raise RuntimeError(f"Invalid YouTube URL: {url}")
-                        metadata = fetch_youtube_metadata(video_id)
-                        transcript_service.save_from_url(
-                            url=url,
-                            title=metadata["title"],
-                            description=metadata["description"],
-                            mode="full",
-                            daily_note_path=vault_root / "Daily Notes" / f"{note_date}.md",
+                        try:
+                            video_id = extract_youtube_id(url)
+                            if not video_id:
+                                raise RuntimeError(f"Invalid YouTube URL: {url}")
+                            metadata = fetch_youtube_metadata(video_id)
+                            transcript_service.save_from_url(
+                                url=url,
+                                title=metadata["title"],
+                                description=metadata["description"],
+                                mode="full",
+                                daily_note_path=vault_root / "Daily Notes" / f"{note_date}.md",
+                            )
+                            youtube_processed += 1
+                            succeeded_urls.append(url)
+                            print(f"[scrape] processed YouTube URL from {note_path.name}: {metadata['title']}")
+                        except Exception as exc:
+                            youtube_skipped += 1
+                            failed_urls.append(url)
+                            print(
+                                f"[scrape] skipped YouTube URL from {note_path.name}: {url} ({exc})",
+                                file=sys.stderr,
+                            )
+
+                    if succeeded_urls:
+                        updated_content = remove_succeeded_youtube_urls(content, set(succeeded_urls))
+                        write_text_with_retry(
+                            note_path,
+                            f"{updated_content}\n" if updated_content else "",
                         )
-                        youtube_processed += 1
-                        print(f"[scrape] processed YouTube URL from {note_path.name}: {metadata['title']}")
 
             if not remaining_content:
                 if args.dry_run:
                     print(f"[scrape] would skip date ingest for {note_path.name}; YouTube URL(s) only")
+                    continue
+
+                if failed_urls:
+                    print(
+                        f"[scrape] leaving {note_path.name} in place for {len(failed_urls)} failed YouTube URL(s)",
+                        file=sys.stderr,
+                    )
                     continue
 
                 processed_path = unique_processed_path(processed_dir, note_path.name)
@@ -395,6 +434,13 @@ def main() -> int:
             written += 1
             print(f"[scrape] wrote {destination}")
 
+            if failed_urls:
+                print(
+                    f"[scrape] leaving {note_path.name} in place for {len(failed_urls)} failed YouTube URL(s)",
+                    file=sys.stderr,
+                )
+                continue
+
             processed_path = unique_processed_path(processed_dir, note_path.name)
             shutil.move(str(note_path), str(processed_path))
             moved += 1
@@ -406,7 +452,8 @@ def main() -> int:
     print(
         "[scrape] summary: "
         f"written={written} moved={moved} skipped_existing={skipped_existing} "
-        f"youtube_processed={youtube_processed} ocr_errors={ocr_errors} failures={failures}"
+        f"youtube_processed={youtube_processed} youtube_skipped={youtube_skipped} "
+        f"ocr_errors={ocr_errors} failures={failures}"
     )
     return 0 if failures == 0 else 1
 
