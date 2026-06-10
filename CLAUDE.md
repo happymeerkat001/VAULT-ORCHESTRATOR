@@ -6,7 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This system NEVER performs destructive or mutating API calls on external services, **except for the explicit GitHub Issues sync described below** (Hermes-to-do items can be pushed to issues on `HERMES_KANBAN_REPO` via `cli/hermes_to_kanban.py` and `cli/hermes_kanban_server.py`).
 
-Allowed: GET, list, read, fetch — and POST/PATCH to GitHub Issues endpoints when running the kanban sync scripts above.
+The autonomous worker (`cli/hermes_worker.py`) MAY also move/rename files inside the vault — but only within two pre-approved zones: `z.Ingestion/` and `Hermes Output/`. It must never write to `Daily Notes/`, code, or anywhere else outside the vault. The worker manages the daily note's `## Hermes-to-do 🪶` section on its own behalf (mark in-progress, mark done with link to `Hermes Output/` deliverable).
+
+Allowed: GET, list, read, fetch — and POST/PATCH to GitHub Issues endpoints when running the kanban sync scripts above. File moves within `z.Ingestion/` and `Hermes Output/` are permitted by the worker.
 Forbidden: delete, update, patch, send, modify — on any other external API (Gmail, Calendar, etc.).
 
 ## Running scripts
@@ -33,6 +35,16 @@ python3 cli/hermes_to_kanban.py --max 0         # push every unchecked item
 python3 cli/hermes_to_kanban.py --dry-run       # show what would push
 python3 cli/hermes_kanban_server.py             # serve POST /kanban on :9120
                                                # (9119 is the Hermes dashboard — taken)
+
+# Hermes-to-do polling worker (autonomous task executor)
+python3 cli/hermes_worker.py                    # one tick: process next unchecked item
+python3 cli/hermes_worker.py --loop --interval 60   # polling loop, 60s default
+python3 cli/hermes_worker.py --no-kanban        # skip the GitHub Issues push
+# LaunchAgent polls every 60s and auto-restarts on crash:
+#   ~/Library/LaunchAgents/com.leon.hermes-worker.plist
+# Logs: ~/.claude/logs/hermes-worker.log
+# Worker writes outputs to: AI-Vault/Hermes Output/<date> <task-name>.md
+# Worker sandbox: reads anywhere in vault, writes only to Hermes Output/ and z.Ingestion/
 
 # Transcript.lol integration
 python3 cli/export_transcripts.py [--dry-run] [--output-dir <dir>]  # export completed Transcript.lol recordings
