@@ -51,6 +51,7 @@ DAILY_NOTES_PATH = VAULT_PATH / "Daily Notes"
 LOCAL_TIMEZONE = "America/Chicago"
 MAX_STARRED_EMAILS = 3
 BRIEFING_HEADER = "## Morning Briefing ☀️"
+HERMES_TODO_HEADER = "## Hermes-to-do 🪶"
 # ─────────────────────────────────────────────────────────────────────────────
 
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -162,6 +163,9 @@ EMAIL_SYSTEM_PROMPT = (
     "If 'rolloverToDo' is present, include those unchecked items "
     "in the To-Do section — do not drop them. "
     "Never place rollover items in Calendar or Email Highlights.\n\n"
+    "Do NOT generate a Hermes-to-do section. That section is written by the "
+    "script directly from rollover data and is preserved across re-runs. "
+    "Never invent Hermes-to-do content.\n\n"
     "Keep it concise. No prose paragraphs. Checkboxes only."
 )
 
@@ -572,8 +576,8 @@ def write_text_with_retry(
     raise last_exc or OSError(f"Unable to write {path}")
 
 
-def get_yesterday_unchecked(date_str: str) -> tuple[list[str], list[str]]:
-    """Extract unchecked items only from To-Think and To-Do in yesterday's note."""
+def get_yesterday_unchecked(date_str: str) -> tuple[list[str], list[str], list[str]]:
+    """Extract unchecked items from To-Think, To-Do, and Hermes-to-do in yesterday's note."""
     if _HAS_ZONEINFO:
         tz = ZoneInfo(LOCAL_TIMEZONE)
         today = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=tz)
@@ -583,7 +587,7 @@ def get_yesterday_unchecked(date_str: str) -> tuple[list[str], list[str]]:
     yesterday_path = DAILY_NOTES_PATH / f"{yesterday}.md"
 
     if not yesterday_path.exists():
-        return [], []
+        return [], [], []
 
     content = read_text_with_retry(yesterday_path)
     lines = content.splitlines()
@@ -591,6 +595,7 @@ def get_yesterday_unchecked(date_str: str) -> tuple[list[str], list[str]]:
     current_section: str | None = None
     think_unchecked: list[str] = []
     todo_unchecked: list[str] = []
+    hermes_unchecked: list[str] = []
 
     for line in lines:
         stripped = line.strip()
@@ -600,7 +605,10 @@ def get_yesterday_unchecked(date_str: str) -> tuple[list[str], list[str]]:
         if stripped == "## To-Do ✅":
             current_section = "todo"
             continue
-        if stripped.startswith("## ") and stripped != "## To-Do ✅":
+        if stripped == HERMES_TODO_HEADER:
+            current_section = "hermes"
+            continue
+        if stripped.startswith("# ") or stripped.startswith("## "):
             current_section = None
             continue
         if current_section and re.match(r"^- \[ \] .+$", line):
@@ -608,8 +616,10 @@ def get_yesterday_unchecked(date_str: str) -> tuple[list[str], list[str]]:
                 think_unchecked.append(line)
             elif current_section == "todo":
                 todo_unchecked.append(line)
+            elif current_section == "hermes":
+                hermes_unchecked.append(line)
 
-    return think_unchecked, todo_unchecked
+    return think_unchecked, todo_unchecked, hermes_unchecked
 
 
 def build_note_preamble(date_str: str) -> str:
@@ -649,6 +659,7 @@ def write_briefing(date_str: str, markdown: str) -> Path:
             "## Calendar 📅",
             "## Email Highlights 📧",
             "## Today's Focus 🧐",
+            HERMES_TODO_HEADER,
         )
         if any(marker in existing for marker in briefing_markers):
             marker_positions = [existing.find(marker) for marker in briefing_markers if marker in existing]
@@ -727,15 +738,16 @@ def main() -> None:
     # 5. Gather rollover items from yesterday
     rollover_failed = False
     try:
-        think_rollover, todo_rollover = get_yesterday_unchecked(today)
+        think_rollover, todo_rollover, hermes_rollover = get_yesterday_unchecked(today)
     except OSError as exc:
         print(f"[ERROR] Could not read yesterday's note for rollover: {exc}", file=sys.stderr)
         rollover_failed = True
-        think_rollover, todo_rollover = [], []
-    if think_rollover or todo_rollover:
+        think_rollover, todo_rollover, hermes_rollover = [], [], []
+    if think_rollover or todo_rollover or hermes_rollover:
         print(
             "[briefing_sync] rollover: "
-            f"{len(think_rollover)} To-Think, {len(todo_rollover)} To-Do unchecked item(s) from yesterday"
+            f"{len(think_rollover)} To-Think, {len(todo_rollover)} To-Do, "
+            f"{len(hermes_rollover)} Hermes-to-do unchecked item(s) from yesterday"
         )
 
     # 6. Generate briefing
@@ -768,8 +780,39 @@ def main() -> None:
     else:
         think_lines = "\n".join(think_rollover) + "\n" if think_rollover else ""
         think_section = f"# To-Think 🧠\n{think_lines}"
+
+    # Hermes-to-do is always written by the script (never by the LLM) so the
+    # section appears in the same place every day and rolls over reliably.
+    hermes_lines = "\n".join(hermes_rollover) + "\n" if hermes_rollover else ""
+    hermes_section = f"{HERMES_TODO_HEADER}\n{hermes_lines}"
+
+    # Insert Hermes-to-do right after the LLM-generated "## To-Do ✅" section
+    # so the layout is consistent: To-Think, To-Do, Hermes-to-do, Calendar, etc.
+    ai_body = ai_markdown.strip()
+    todo_marker = "## To-Do ✅"
+    if todo_marker in ai_body:
+        head, todo_block = ai_body.split(todo_marker, 1)
+        # Reattach the marker (split() discards it) and find the next top-level
+        # section boundary so we know where the To-Do block ends.
+        lines = [todo_marker + "\n"] + todo_block.splitlines(keepends=True)
+        rest_start = 0
+        for idx, line in enumerate(lines[1:], start=1):
+            if line.startswith("## "):
+                rest_start = idx
+                break
+        else:
+            rest_start = len(lines)
+        todo_part = "".join(lines[:rest_start])
+        rest_part = "".join(lines[rest_start:])
+        # Collapse a leading blank line right after the header for clean output.
+        todo_part = re.sub(r"\A(\s*## To-Do ✅\s*\n)\n+", r"\1", todo_part)
+        ai_body = f"{head}{todo_part.rstrip()}\n\n{hermes_section.rstrip()}\n\n{rest_part.lstrip()}".rstrip()
+    else:
+        # Defensive fallback: LLM didn't emit To-Do (shouldn't happen); append.
+        ai_body = f"{ai_body}\n\n{hermes_section}".rstrip()
+
     degraded_tag = "#degraded-sync\n\n" if (rollover_failed or minimax_failed) else ""
-    markdown = f"{BRIEFING_HEADER}\n\n{degraded_tag}{weather_markdown}\n{think_section}\n{ai_markdown.strip()}\n"
+    markdown = f"{BRIEFING_HEADER}\n\n{degraded_tag}{weather_markdown}\n{think_section}\n{ai_body}\n"
     try:
         out_path = write_briefing(today, markdown)
         print(f"[briefing_sync] wrote to: {out_path}")
