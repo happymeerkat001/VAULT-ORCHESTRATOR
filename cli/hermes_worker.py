@@ -338,11 +338,14 @@ def extract_hermes_section(note_text: str) -> tuple[int, int, list[tuple[int, st
         raw = lines[k]
         m_done = re.match(r"^- \[x\]\s+(.+)$", raw.strip(), re.IGNORECASE)
         m_prog = re.match(r"^- \[~\]\s+(.+)$", raw.strip())
+        m_fail = re.match(r"^- \[!\]\s+(.+)$", raw.strip())
         m_open = re.match(r"^- \[ \]\s+(.+)$", raw.strip())
         if m_done:
             items.append((k, "done", m_done.group(1)))
         elif m_prog:
             items.append((k, "in_progress", m_prog.group(1)))
+        elif m_fail:
+            items.append((k, "failed", m_fail.group(1)))
         elif m_open:
             items.append((k, "open", m_open.group(1)))
     return start, end, items
@@ -352,7 +355,11 @@ def next_open_item(note_text: str) -> tuple[int, str] | None:
     """Return (line_index, raw_task_text) of the next item to work on.
 
     Prefers in-progress (`- [~]`) items first (crash recovery), then open
-    (`- [ ]`) items. Returns None if the section is empty or all done.
+    (`- [ ]`) items. Skips `done` (`- [x]`) and `failed` (`- [!]`) items.
+    Returns None if the section is empty or all done.
+
+    Failed items are NEVER picked up automatically. They are visible in the
+    daily note for human review; rerun them by editing `- [!]` back to `- [ ]`.
     """
     _, _, items = extract_hermes_section(note_text)
     for line_idx, status, text in items:
@@ -393,10 +400,15 @@ def mark_done(
 
 
 def mark_failed(note_path: Path, line_idx: int, original_text: str, reason: str) -> None:
-    """Leave the item open but append a failure note for human attention."""
+    """Mark a task as failed so it does not block the queue.
+
+    Failed items use the `- [!]` checkbox state. The worker will skip them
+    on subsequent ticks; a human can either fix the underlying issue and
+    rewrite the line back to `- [ ]` to retry, or delete it.
+    """
     lines = note_path.read_text(encoding="utf-8").splitlines()
     if line_idx < len(lines):
-        lines[line_idx] = "- [ ] " + original_text + "  _(failed: " + reason[:120] + ")_"
+        lines[line_idx] = "- [!] " + original_text + "  _(failed: " + reason[:120] + ")_"
     note_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -422,7 +434,13 @@ SYSTEM_PROMPT = (
     "note. The worker script will mark the task done and append a link.\n"
     "7. If the task cannot be done with the available tools, write a brief "
     "deliverable explaining what was attempted and why it failed, then "
-    "return the summary as in rule 5."
+    "return the summary as in rule 5.\n"
+    "8. The daily note uses four task states: `- [ ]` open, `- [~]` in "
+    "progress (with `_(running)_` suffix), `- [x]` done, `- [!]` failed "
+    "(with `_(failed: ...reason...)_` suffix). You will never see `- [!]` "
+    "lines; the worker skips them. If you encounter a `_(failed: ...)_` "
+    "marker while reading the vault, treat it as a human-visible failure "
+    "note and do not retry the task on your own."
 )
 
 
@@ -611,7 +629,14 @@ def main() -> int:
     if not args.loop:
         result = process_one(today, env, push_kanban=not args.no_kanban)
         print(result)
-        return 0 if result.startswith(("ok", "no_open_items")) else 1
+        # exit 0 for handled outcomes (ok, no_open_items, failed); non-zero only on
+        # unexpected errors (missing API key, daily note missing/unreadable). A
+        # failed task is a handled outcome: the item has been marked - [!] and the
+        # queue is unblocked. Letting the LaunchAgent respawn on failure would be
+        # wrong because it would re-process the same item.
+        if result.startswith(("ok", "no_open_items", "failed:")):
+            return 0
+        return 1
 
     # Polling loop
     print("[worker] starting polling loop, interval=%ds, date=%s" % (args.interval, today))

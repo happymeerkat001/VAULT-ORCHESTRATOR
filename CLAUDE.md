@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This system NEVER performs destructive or mutating API calls on external services, **except for the explicit GitHub Issues sync described below** (Hermes-to-do items can be pushed to issues on `HERMES_KANBAN_REPO` via `cli/hermes_to_kanban.py` and `cli/hermes_kanban_server.py`).
 
-The autonomous worker (`cli/hermes_worker.py`) MAY also move/rename files inside the vault — but only within two pre-approved zones: `z.Ingestion/` and `Hermes Output/`. It must never write to `Daily Notes/`, code, or anywhere else outside the vault. The worker manages the daily note's `## Hermes-to-do 🪶` section on its own behalf (mark in-progress, mark done with link to `Hermes Output/` deliverable).
+The autonomous worker (`cli/hermes_worker.py`) MAY also move/rename files inside the vault — but only within two pre-approved zones: `z.Ingestion/` and `Hermes Output/`. It must never write to `Daily Notes/`, code, or anywhere else outside the vault. The worker manages the daily note's `## Hermes-to-do 🪶` section on its own behalf (mark in-progress, mark done with link to `Hermes Output/` deliverable, mark failed with a short reason).
 
 Allowed: GET, list, read, fetch — and POST/PATCH to GitHub Issues endpoints when running the kanban sync scripts above. File moves within `z.Ingestion/` and `Hermes Output/` are permitted by the worker.
 Forbidden: delete, update, patch, send, modify — on any other external API (Gmail, Calendar, etc.).
@@ -45,6 +45,20 @@ python3 cli/hermes_worker.py --no-kanban        # skip the GitHub Issues push
 # Logs: ~/.claude/logs/hermes-worker.log
 # Worker writes outputs to: AI-Vault/Hermes Output/<date> <task-name>.md
 # Worker sandbox: reads anywhere in vault, writes only to Hermes Output/ and z.Ingestion/
+# Per-task limits: max 20 tool-use iterations, max 180s wall clock. One task per tick.
+
+### Hermes-to-do 🪶 task states
+
+The worker's daily-note `## Hermes-to-do 🪶` section uses four checkbox states. The worker itself parses and writes all of them; humans only write `- [ ]`:
+
+| State | Marker | Meaning | Set by | Picked up by worker? |
+|-------|--------|---------|--------|----------------------|
+| open | `- [ ]` | Queued, ready to run | Human (or initial ingest) | Yes — next tick |
+| in-progress | `- [~] text  _(running)_` | Currently running | Worker on tick start | Yes — preferred over open (crash recovery) |
+| done | `- [x] text  _(→ see Hermes Output/...)_` | Finished, deliverable on disk | Worker on success | No |
+| failed | `- [!] text  _(failed: ...reason...)_` | Timed out or errored; queue unblocked | Worker on failure | **No** — human must edit back to `- [ ]` to retry, or delete |
+
+Failed items are deliberately sticky: a single bad task never blocks downstream work. The worker skips `- [!]` and continues down the list. To retry a failed item, change the leading `- [!]` back to `- [ ]`.
 
 # Transcript.lol integration
 python3 cli/export_transcripts.py [--dry-run] [--output-dir <dir>]  # export completed Transcript.lol recordings
