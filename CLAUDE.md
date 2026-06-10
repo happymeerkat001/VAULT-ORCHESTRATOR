@@ -4,9 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Read-only contract
 
-This system NEVER performs destructive or mutating API calls on external services.
-Allowed: GET, list, read, fetch.
-Forbidden: delete, update, patch, send, modify — on any external API (Gmail, Calendar, etc.).
+This system NEVER performs destructive or mutating API calls on external services, **except for the explicit GitHub Issues sync described below** (Hermes-to-do items can be pushed to issues on `HERMES_KANBAN_REPO` via `cli/hermes_to_kanban.py` and `cli/hermes_kanban_server.py`).
+
+Allowed: GET, list, read, fetch — and POST/PATCH to GitHub Issues endpoints when running the kanban sync scripts above.
+Forbidden: delete, update, patch, send, modify — on any other external API (Gmail, Calendar, etc.).
 
 ## Running scripts
 
@@ -25,6 +26,13 @@ python3 cli/archive_youtube.py          # bare YouTube URLs from Untitled*.md �
 python3 cli/daily_note_youtube.py       # bare YouTube URLs from Daily Notes/YYYY-MM-DD.md → z.Ingestion/
 python3 cli/scrape_notes.py             # date-named notes + YouTube URLs + OCR images → z.Ingestion/
 python3 cli/reprocess_youtube_stubs.py  # URL-only z.Ingestion stubs → normal titled transcript notes
+
+# Hermes-to-do -> GitHub Issues sync
+python3 cli/hermes_to_kanban.py                 # push first unchecked item (default --max 1)
+python3 cli/hermes_to_kanban.py --max 0         # push every unchecked item
+python3 cli/hermes_to_kanban.py --dry-run       # show what would push
+python3 cli/hermes_kanban_server.py             # serve POST /kanban on :9120
+                                               # (9119 is the Hermes dashboard — taken)
 
 # Transcript.lol integration
 python3 cli/export_transcripts.py [--dry-run] [--output-dir <dir>]  # export completed Transcript.lol recordings
@@ -106,7 +114,7 @@ Every ingest script uses these idioms — match them when adding new sources:
 
 | Store | Contents |
 |-------|----------|
-| `.env` (repo root, gitignored) | `MINIMAX_API_KEY`, `ANTHROPIC_BASE_URL`, `HEDY_AI_API_KEY`, `IMGUR_CLIENT_ID`, `FIREBASE_API_KEY`, `TRANSCRIPT_LOL_SPACE_ID`, `TRANSCRIPT_LOL_API_KEY`, `TRANSCRIPT_LOL_SUMMARY_PROMPT_ID`, `TRANSCRIPT_LOL_SUMMARY_TWEAK`, `Transcript.lol_Login`, `Transcript.lol_Password`, `TRANSCRIPT_LOL_AUTH_TOKEN`, `TRANSCRIPT_LOL_SESSION_COOKIE`, `GOOGLE_*` |
+| `.env` (repo root, gitignored) | `MINIMAX_API_KEY`, `ANTHROPIC_BASE_URL`, `HEDY_AI_API_KEY`, `IMGUR_CLIENT_ID`, `FIREBASE_API_KEY`, `TRANSCRIPT_LOL_SPACE_ID`, `TRANSCRIPT_LOL_API_KEY`, `TRANSCRIPT_LOL_SUMMARY_PROMPT_ID`, `TRANSCRIPT_LOL_SUMMARY_TWEAK`, `Transcript.lol_Login`, `Transcript.lol_Password`, `TRANSCRIPT_LOL_AUTH_TOKEN`, `TRANSCRIPT_LOL_SESSION_COOKIE`, `GITHUB_TOKEN`, `HERMES_KANBAN_REPO`, `HERMES_KANBAN_LABEL`, `HERMES_KANBAN_DRY_RUN`, `GOOGLE_*` |
 | `~/.config/vault-orchestrator/google_credentials` | Google OAuth2 tokens (refresh + access) |
 | `~/.config/mymemo/credentials` | MyMemo JWT + auth0 cookie |
 | `~/.config/anthropic/credentials` | Claude API key (vision_sync only) |
