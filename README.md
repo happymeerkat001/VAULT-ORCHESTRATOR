@@ -57,7 +57,7 @@ chmod 600 ~/.config/vault-orchestrator/google_credentials
 
 ### 2. Transcript.lol credentials
 
-`cli/transcribe.py` and `cli/export_transcripts.py` read Transcript.lol auth from repo-root `.env`.
+`cli/transcribe.py` and `cli/export_transcripts.py` read Transcript.lol auth from repo-root `.env` or matching process environment variables.
 
 Minimum setup:
 
@@ -73,6 +73,15 @@ Alternative auth is also supported:
 - `TRANSCRIPT_LOL_AUTH_TOKEN`
 - `TRANSCRIPT_LOL_SESSION_COOKIE`
 - `Transcript.lol_Login` + `Transcript.lol_Password` with `FIREBASE_API_KEY`
+- `Transcript.lol_Login` + `Transcript.lol_Password` with Playwright-installed browser login fallback
+- `TRANSCRIPT_LOL_SPACE_NAME` to resolve a workspace by name instead of hard-coding the space id
+
+Browser-login fallback install:
+
+```sh
+python3 -m pip install playwright
+python3 -m playwright install chromium
+```
 
 Quick auth check:
 

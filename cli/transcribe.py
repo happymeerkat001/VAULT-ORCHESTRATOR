@@ -9,9 +9,10 @@ Manual run:
 Auth test:
   python3 /Users/leon/Documents/Code/vault-orchestrator/cli/transcribe.py --test-auth
 
-Optional env vars in .env:
+Optional env vars in .env or process environment:
   FIREBASE_API_KEY
   TRANSCRIPT_LOL_SPACE_ID
+  TRANSCRIPT_LOL_SPACE_NAME
   TRANSCRIPT_LOL_API_KEY
   TRANSCRIPT_LOL_AUTH_TOKEN
   TRANSCRIPT_LOL_SESSION_COOKIE
@@ -26,13 +27,14 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
 import re
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from http.cookiejar import CookieJar
+from http.cookiejar import Cookie, CookieJar
 from pathlib import Path
 
 from media_captions import fetch_vimeo_captions
@@ -68,16 +70,19 @@ TERMINAL_STATUSES = {"COMPLETED", "COMPLETE", "DONE", "READY", "SUCCEEDED", "SUC
 FAILED_STATUSES = {"FAILED", "ERROR", "CANCELLED", "REJECTED"}
 
 
-def load_env() -> dict[str, str]:
+def load_env(env_path: Path | None = None) -> dict[str, str]:
     values: dict[str, str] = {}
-    if not ENV_PATH.exists():
-        return values
+    path = env_path or ENV_PATH
+    if path.exists():
+        pattern = re.compile(r'^\s*([A-Za-z0-9_.-]+)\s*=\s*"?([^"]*)"?\s*$')
+        for line in path.read_text(encoding="utf-8").splitlines():
+            match = pattern.match(line)
+            if match:
+                values[match.group(1)] = match.group(2)
 
-    pattern = re.compile(r'^\s*([A-Za-z0-9_.-]+)\s*=\s*"?([^"]*)"?\s*$')
-    for line in ENV_PATH.read_text(encoding="utf-8").splitlines():
-        match = pattern.match(line)
-        if match:
-            values[match.group(1)] = match.group(2)
+    for key, value in os.environ.items():
+        if key in values or key.startswith('TRANSCRIPT_LOL_') or key.startswith('FIREBASE_') or key.startswith('SKOOL_') or key == 'Transcript.lol_Login' or key == 'Transcript.lol_Password':
+            values[key] = value
     return values
 
 
@@ -151,7 +156,8 @@ def urls_match(source_url: str, target_url: str) -> bool:
 class TranscriptClient:
     def __init__(self, env: dict[str, str]) -> None:
         self.env = env
-        self.space_id = env.get("TRANSCRIPT_LOL_SPACE_ID", DEFAULT_SPACE_ID)
+        self.space_name = (env.get("TRANSCRIPT_LOL_SPACE_NAME") or "").strip()
+        self.space_id = (env.get("TRANSCRIPT_LOL_SPACE_ID") or DEFAULT_SPACE_ID).strip() or DEFAULT_SPACE_ID
         self.cookie_jar = CookieJar()
         self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.cookie_jar))
         self.auth_headers: dict[str, str] = {}
@@ -206,18 +212,21 @@ class TranscriptClient:
         if api_key:
             self.auth_headers = {"x-api-key": api_key}
             self._verify_auth("api key")
+            self._resolve_space_id()
             return
 
         auth_token = self.env.get("TRANSCRIPT_LOL_AUTH_TOKEN")
         if auth_token:
             self.auth_headers = {"Authorization": auth_token}
             self._verify_auth("auth token")
+            self._resolve_space_id()
             return
 
         session_cookie = self.env.get("TRANSCRIPT_LOL_SESSION_COOKIE")
         if session_cookie:
             self.auth_headers = {"Cookie": session_cookie}
             self._verify_auth("session cookie")
+            self._resolve_space_id()
             return
 
         email = self.env.get("Transcript.lol_Login")
@@ -229,8 +238,90 @@ class TranscriptClient:
                 "Transcript.lol_Login + Transcript.lol_Password."
             )
 
-        self._login_with_firebase(email, password)
-        self._establish_transcript_auth()
+        firebase_api_key = self.env.get("FIREBASE_API_KEY", "")
+        if firebase_api_key:
+            self._login_with_firebase(email, password)
+            self._establish_transcript_auth()
+            self._resolve_space_id()
+            return
+
+        self._login_with_browser_session(email, password)
+        self._verify_auth("browser session")
+        self._resolve_space_id()
+
+    def _resolve_space_id(self) -> None:
+        if not self.space_name:
+            return
+        data = self._json_request(f"{API_BASE_URL}/spaces")
+        spaces = [item for item in data if isinstance(item, dict)] if isinstance(data, list) else []
+        for space in spaces:
+            name = space.get("name")
+            sid = space.get("id") or space.get("_id")
+            if isinstance(name, str) and name.strip() == self.space_name and isinstance(sid, str) and sid.strip():
+                self.space_id = sid.strip()
+                return
+        raise RuntimeError(f"Workspace named {self.space_name!r} was not found in Transcript.lol spaces list.")
+
+    def _login_with_browser_session(self, email: str, password: str) -> None:
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError as exc:
+            raise RuntimeError(
+                "Playwright is required for browser-session Transcript.lol login when FIREBASE_API_KEY is unavailable. "
+                "Install it with: python3 -m pip install playwright && python3 -m playwright install chromium"
+            ) from exc
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"{BASE_URL}/auth/login", wait_until="domcontentloaded", timeout=60000)
+            page.wait_for_timeout(1200)
+            if page.locator('input[type="email"]').count() > 0:
+                page.locator('input[type="email"]').first.fill(email)
+                page.locator('input[type="email"]').first.press('Enter')
+                page.wait_for_timeout(1200)
+            if page.locator('input[type="password"]').count() == 0:
+                raise RuntimeError("Transcript.lol login page did not expose a password input during browser auth.")
+            page.locator('input[type="password"]').first.fill(password)
+            page.locator('button:has-text("Sign In")').first.click()
+            page.wait_for_timeout(6000)
+            cookies = page.context.cookies()
+            browser.close()
+
+        if not cookies:
+            raise RuntimeError("Transcript.lol browser login did not produce any cookies.")
+        self._load_cookies(cookies)
+
+    def _load_cookies(self, cookies: list[dict[str, object]]) -> None:
+        for cookie in cookies:
+            name = str(cookie.get('name') or '').strip()
+            value = str(cookie.get('value') or '')
+            domain = str(cookie.get('domain') or '').strip()
+            if not name or not domain:
+                continue
+            path = str(cookie.get('path') or '/') or '/'
+            secure = bool(cookie.get('secure', False))
+            expires = cookie.get('expires')
+            expires_int = int(expires) if isinstance(expires, (int, float)) and expires > 0 else None
+            self.cookie_jar.set_cookie(Cookie(
+                version=0,
+                name=name,
+                value=value,
+                port=None,
+                port_specified=False,
+                domain=domain,
+                domain_specified=bool(domain),
+                domain_initial_dot=domain.startswith('.'),
+                path=path,
+                path_specified=True,
+                secure=secure,
+                expires=expires_int,
+                discard=False,
+                comment=None,
+                comment_url=None,
+                rest={'HttpOnly': 'True' if cookie.get('httpOnly', False) else 'False'},
+                rfc2109=False,
+            ))
 
     def _verify_auth(self, auth_mode: str) -> None:
         for candidate in (
