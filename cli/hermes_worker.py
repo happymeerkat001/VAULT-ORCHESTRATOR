@@ -694,6 +694,24 @@ def mark_in_progress(note_path: Path, line_idx: int, task_text: str) -> None:
     _write_text_with_retry(note_path, "\n".join(lines) + "\n")
 
 
+def _format_done_suffix(relpath: str) -> str:
+    """Render the "see deliverable" marker with an Obsidian wikilink.
+
+    A bare relative path is converted into a wikilink using the filename stem
+    so it renders as an active link in Obsidian. Stems are unique enough within
+    a single day's Hermes Output/ set to disambiguate without the date prefix
+    leaking into the link text. If the relpath is empty or the link cannot be
+    derived, fall back to a plain string in parentheses.
+    """
+    if not relpath:
+        return "  _(no output file written)_"
+    if not relpath.lower().endswith(".md"):
+        return "  _(→ see " + relpath + ")_"
+    name = relpath.rsplit("/", 1)[-1]
+    stem = name[:-3] if name.lower().endswith(".md") else name
+    return "  _(→ see [[%s]])_" % stem
+
+
 def mark_done(
     note_path: Path,
     line_idx: int,
@@ -703,7 +721,7 @@ def mark_done(
     lines = _read_text_with_retry(note_path).splitlines()
     if line_idx < len(lines):
         lines[line_idx] = (
-            "- [x] " + original_text + "  _(→ see " + output_relpath + ")_"
+            "- [x] " + original_text + _format_done_suffix(output_relpath)
         )
     _write_text_with_retry(note_path, "\n".join(lines) + "\n")
 
