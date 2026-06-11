@@ -741,7 +741,8 @@ SYSTEM_PROMPT = (
     "task to today's daily note under '## Hermes-to-do 🪶'. Your job is to "
     "do that task end-to-end using the tools provided.\n\n"
     "Rules:\n"
-    "1. Plan internally first; do not narrate every step to the user.\n"
+    "1. A pre-task breakdown is created before you begin execution. Follow it "
+    "as a working checklist, but adapt if tool results show a better path.\n"
     "2. Use tools to gather context, perform actions, and verify the result.\n"
     "3. You may READ and WRITE any file inside the vault when needed to "
     "complete the task. The only exception is the Hermes-to-do section of the "
@@ -779,14 +780,22 @@ SYSTEM_PROMPT = (
 )
 
 
-def call_minimax(messages: list[dict], api_key: str) -> dict:
-    body = json.dumps({
+def call_minimax(
+    messages: list[dict],
+    api_key: str,
+    tools: list[dict] | None = TOOLS,
+    tool_choice: str | None = "auto",
+) -> dict:
+    body_obj: dict = {
         "model": "MiniMax-M2.7",
         "messages": messages,
-        "tools": TOOLS,
-        "tool_choice": "auto",
         "temperature": 0.2,
-    }).encode("utf-8")
+    }
+    if tools is not None:
+        body_obj["tools"] = tools
+    if tool_choice is not None:
+        body_obj["tool_choice"] = tool_choice
+    body = json.dumps(body_obj).encode("utf-8")
     auth_value = "Bearer" + " " + api_key
     req = urllib.request.Request(
         MINIMAX_URL,
@@ -803,6 +812,67 @@ def call_minimax(messages: list[dict], api_key: str) -> dict:
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError("MiniMax HTTP %s: %s" % (exc.code, detail[:400])) from exc
+
+
+def build_task_breakdown(
+    task_text: str,
+    today: str,
+    max_seconds: int,
+    max_iterations: int,
+    api_key: str,
+    explicit_md_paths: list[str],
+    target_note_path: str,
+) -> str:
+    """Create a small execution checklist before starting work.
+
+    This intentionally runs before the tool-use loop so large daily-note tasks
+    are decomposed into manageable parts. It does not get tools and must not
+    make claims about the vault contents; it is only an execution plan.
+    """
+    target_line = target_note_path or "(none detected)"
+    paths_line = "\n".join("- " + p for p in explicit_md_paths) if explicit_md_paths else "(none)"
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You decompose one Hermes-to-do task into a practical execution "
+                "checklist before any work begins. Return only a compact numbered "
+                "list with 3-7 manageable parts. Do not use tools. Do not claim "
+                "you have read files or completed anything. Include verification "
+                "as the final part."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                "Today's date: %s\n"
+                "Task: %s\n"
+                "Per-task budget: %d seconds, %d LLM iterations.\n"
+                "Explicit target note path: %s\n"
+                "Markdown paths mentioned:\n%s\n\n"
+                "Break this into smaller, manageable parts before execution."
+            ) % (today, task_text, max_seconds, max_iterations, target_line, paths_line),
+        },
+    ]
+    try:
+        data = call_minimax(messages, api_key, tools=None, tool_choice=None)
+        choice = (data.get("choices") or [{}])[0]
+        msg = choice.get("message") or {}
+        content = (msg.get("content") or "").strip()
+        content = re.sub(r"<think>.*?</think>\s*", "", content, flags=re.DOTALL).strip()
+        if content:
+            return content[:3000]
+    except Exception:
+        pass
+
+    fallback = [
+        "1. Identify the target deliverable and any explicitly named source or target notes.",
+        "2. Read the relevant local notes and/or fetch the minimum needed external sources.",
+        "3. Extract the key facts, decisions, quotes, and gaps relevant to the task.",
+        "4. Update the target note directly, or write a focused Hermes Output deliverable if no target note is clear.",
+        "5. Verify the written result answers the original task and points to the correct output path.",
+    ]
+    return "\n".join(fallback)
 
 
 def run_task(
@@ -828,19 +898,31 @@ def run_task(
     max_seconds = eff_seconds
     max_iterations = eff_iters
 
+    explicit_md_paths = extract_absolute_md_paths(task_text)
+    target_note_path = infer_target_note_path(task_text)
+    task_breakdown = build_task_breakdown(
+        task_text=task_text,
+        today=today,
+        max_seconds=max_seconds,
+        max_iterations=max_iterations,
+        api_key=api_key,
+        explicit_md_paths=explicit_md_paths,
+        target_note_path=target_note_path,
+    )
+
     user_msg = (
         "Today's date: %s\n"
         "Vault root: %s\n"
         "Task: %s\n"
         "Per-task budget: %d seconds wall-clock, %d LLM iterations.\n\n"
-        "Begin. Use tools to do the work. Prefer updating an explicit target "
+        "Pre-task breakdown created before execution:\n%s\n\n"
+        "Begin. Work through the breakdown in small parts. Use tools to do "
+        "the work and verify each major step. Prefer updating an explicit target "
         "note path directly when the task provides one. Otherwise, for research "
         "or synthesis tasks, write your deliverable to Hermes Output/%s <safe-name>.md, "
         "then reply with a 2-4 sentence summary."
-    ) % (today, VAULT_ROOT, task_text, max_seconds, max_iterations, today)
+    ) % (today, VAULT_ROOT, task_text, max_seconds, max_iterations, task_breakdown, today)
 
-    explicit_md_paths = extract_absolute_md_paths(task_text)
-    target_note_path = infer_target_note_path(task_text)
     if target_note_path:
         user_msg += (
             "\n\nExplicit target note path detected: %s\n"
