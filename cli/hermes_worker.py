@@ -30,6 +30,7 @@ itself (the LLM must not edit that section directly).
 import argparse
 import json
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -285,6 +286,64 @@ def _write_text_with_retry(path: Path, content: str, attempts: int = 5) -> None:
             last = exc
             time.sleep(0.4 * (2 ** i))
     raise last  # type: ignore[misc]
+
+
+# iCloud aggressively holds file locks on the daily note (Obsidian itself is
+# constantly reading/writing it). On contended ticks the default 5-attempt
+# backoff (0.4 + 0.8 + 1.6 + 3.2 + 6.4 = ~12s) is not enough and the tick
+# logs `ERROR: read daily note failed: [Errno 11] Resource deadlock avoided`
+# every 30s, producing a long string of useless tick cycles. Use a much longer
+# retry on daily-note reads specifically: 10 attempts, 1s base, capped at 32s
+# per backoff, with a small random jitter so two concurrent LaunchAgent ticks
+# don't synchronize their retries and starve iCloud.
+DAILY_NOTE_READ_ATTEMPTS = 10
+DAILY_NOTE_READ_BASE_DELAY = 1.0
+DAILY_NOTE_READ_MAX_DELAY = 32.0
+DAILY_NOTE_WRITE_ATTEMPTS = 10
+
+
+def _read_daily_note_with_retry(path: Path) -> str:
+    """Read the daily note with a long, jittered retry budget for EDEADLK."""
+    last: Exception | None = None
+    for i in range(DAILY_NOTE_READ_ATTEMPTS):
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError as exc:
+            last = exc
+            # Last attempt: no sleep, raise immediately on the way out.
+            if i == DAILY_NOTE_READ_ATTEMPTS - 1:
+                break
+            delay = min(DAILY_NOTE_READ_BASE_DELAY * (2 ** i), DAILY_NOTE_READ_MAX_DELAY)
+            # Jitter ±20% so two simultaneous ticks don't retry in lockstep.
+            delay = delay * (0.8 + random.random() * 0.4)
+            time.sleep(delay)
+    assert last is not None  # for type-checker
+    raise last
+
+
+def _write_daily_note_with_retry(path: Path, content: str) -> None:
+    """Write the daily note with a long, jittered retry budget for EDEADLK.
+
+    Mirror of `_read_daily_note_with_retry`. The 10-attempt budget is generous
+    on purpose: under sustained iCloud contention this is the only retry loop
+    standing between the worker and an exit-1 tick, so we accept a longer
+    wait in exchange for not wasting a tick cycle on a recoverable error.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    last: Exception | None = None
+    for i in range(DAILY_NOTE_WRITE_ATTEMPTS):
+        try:
+            path.write_text(content, encoding="utf-8")
+            return
+        except OSError as exc:
+            last = exc
+            if i == DAILY_NOTE_WRITE_ATTEMPTS - 1:
+                break
+            delay = min(DAILY_NOTE_READ_BASE_DELAY * (2 ** i), DAILY_NOTE_READ_MAX_DELAY)
+            delay = delay * (0.8 + random.random() * 0.4)
+            time.sleep(delay)
+    assert last is not None
+    raise last
 
 
 def tool_read_file(args: dict) -> str:
@@ -688,10 +747,30 @@ def infer_target_note_path(task_text: str) -> str:
 # ----------------------- daily-note mutation --------------------------------
 
 def mark_in_progress(note_path: Path, line_idx: int, task_text: str) -> None:
-    lines = _read_text_with_retry(note_path).splitlines()
-    if line_idx < len(lines):
-        lines[line_idx] = "- [~] " + task_text + "  _(running)_"
-    _write_text_with_retry(note_path, "\n".join(lines) + "\n")
+    """Rewrite a `- [ ]` line as `- [~] ... _(running)_` and write back.
+
+    The daily note is the single most-contended iCloud file in the vault, so
+    both the read-modify-write round-trip and the write itself need a long,
+    jittered retry budget. EDEADLK here is recoverable; the previous 5x/0.4s
+    budget wedged the worker for minutes under load.
+    """
+    last: Exception | None = None
+    for attempt in range(DAILY_NOTE_READ_ATTEMPTS):
+        try:
+            lines = _read_daily_note_with_retry(note_path).splitlines()
+            if line_idx < len(lines):
+                lines[line_idx] = "- [~] " + task_text + "  _(running)_"
+            _write_daily_note_with_retry(note_path, "\n".join(lines) + "\n")
+            return
+        except OSError as exc:
+            last = exc
+            if attempt == DAILY_NOTE_READ_ATTEMPTS - 1:
+                break
+            delay = min(DAILY_NOTE_READ_BASE_DELAY * (2 ** attempt), DAILY_NOTE_READ_MAX_DELAY)
+            delay = delay * (0.8 + random.random() * 0.4)
+            time.sleep(delay)
+    assert last is not None
+    raise last
 
 
 def _format_done_suffix(relpath: str) -> str:
@@ -718,20 +797,46 @@ def mark_done(
     original_text: str,
     output_relpath: str,
 ) -> None:
-    lines = _read_text_with_retry(note_path).splitlines()
-    if line_idx < len(lines):
-        lines[line_idx] = (
-            "- [x] " + original_text + _format_done_suffix(output_relpath)
-        )
-    _write_text_with_retry(note_path, "\n".join(lines) + "\n")
+    last: Exception | None = None
+    for attempt in range(DAILY_NOTE_READ_ATTEMPTS):
+        try:
+            lines = _read_daily_note_with_retry(note_path).splitlines()
+            if line_idx < len(lines):
+                lines[line_idx] = (
+                    "- [x] " + original_text + _format_done_suffix(output_relpath)
+                )
+            _write_daily_note_with_retry(note_path, "\n".join(lines) + "\n")
+            return
+        except OSError as exc:
+            last = exc
+            if attempt == DAILY_NOTE_READ_ATTEMPTS - 1:
+                break
+            delay = min(DAILY_NOTE_READ_BASE_DELAY * (2 ** attempt), DAILY_NOTE_READ_MAX_DELAY)
+            delay = delay * (0.8 + random.random() * 0.4)
+            time.sleep(delay)
+    assert last is not None
+    raise last
 
 
 def mark_open(note_path: Path, line_idx: int, original_text: str) -> None:
     """Restore a task to unchecked/open state after a failed run."""
-    lines = _read_text_with_retry(note_path).splitlines()
-    if line_idx < len(lines):
-        lines[line_idx] = "- [ ] " + original_text
-    _write_text_with_retry(note_path, "\n".join(lines) + "\n")
+    last: Exception | None = None
+    for attempt in range(DAILY_NOTE_READ_ATTEMPTS):
+        try:
+            lines = _read_daily_note_with_retry(note_path).splitlines()
+            if line_idx < len(lines):
+                lines[line_idx] = "- [ ] " + original_text
+            _write_daily_note_with_retry(note_path, "\n".join(lines) + "\n")
+            return
+        except OSError as exc:
+            last = exc
+            if attempt == DAILY_NOTE_READ_ATTEMPTS - 1:
+                break
+            delay = min(DAILY_NOTE_READ_BASE_DELAY * (2 ** attempt), DAILY_NOTE_READ_MAX_DELAY)
+            delay = delay * (0.8 + random.random() * 0.4)
+            time.sleep(delay)
+    assert last is not None
+    raise last
 
 
 # ----------------------- LLM tool-use loop ---------------------------------
@@ -895,6 +1000,14 @@ def run_task(
     eff_iters = MAX_LOOP_ITERATIONS if max_iterations <= 0 else max_iterations
     eff_seconds = max(30, min(eff_seconds, 3600))      # 30s .. 1h
     eff_iters = max(2, min(eff_iters, 200))            # 2 .. 200 iterations
+    # If the user only set a wall-clock budget (e.g. `- [ ] [1200s] research M3`),
+    # derive a reasonable iteration ceiling from it so the seconds hint actually
+    # buys more tool-use steps. Empirically, research tasks average 3-6s/iter
+    # (read_file + LLM round-trip + tool dispatch). 4s/iter is a conservative
+    # floor; clamp at MAX_LOOP_ITERATIONS=20 on the low end and the 200-iter
+    # hard cap on the high end.
+    if max_seconds > 0 and max_iterations <= 0:
+        eff_iters = max(MAX_LOOP_ITERATIONS, min(200, max_seconds // 4))
     max_seconds = eff_seconds
     max_iterations = eff_iters
 
@@ -1058,7 +1171,7 @@ def process_one(today: str, env: dict, push_kanban: bool) -> str:
     if not note_path.exists():
         return "ERROR: daily note not found: %s" % note_path
     try:
-        note_text = _read_text_with_retry(note_path)
+        note_text = _read_daily_note_with_retry(note_path)
     except OSError as exc:
         return "ERROR: read daily note failed: %s" % exc
     nxt = next_open_item(note_text)

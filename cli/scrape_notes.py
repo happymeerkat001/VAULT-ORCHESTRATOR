@@ -40,7 +40,7 @@ from datetime import date as date_type
 from pathlib import Path
 
 from archive_youtube import fetch_youtube_metadata
-from daily_note_youtube import YOUTUBE_URL_RE
+from daily_note_youtube import YOUTUBE_URL_RE, annotate_failed_url
 from export_transcripts import DEFAULT_OUTPUT_DIR, ensure_daily_note_link, sanitize_title
 from export_transcripts import extract_youtube_id
 from transcript_server import TranscriptService
@@ -189,6 +189,47 @@ def remove_succeeded_youtube_urls(content: str, succeeded_urls: set[str]) -> str
     return "\n".join(remaining_lines).strip()
 
 
+def _annotate_failed_urls_in_note(
+    note_path: Path,
+    failed_urls: list[tuple[str, str]],
+) -> None:
+    """Add a `fail: <reason>` line below each failed YouTube URL in the note.
+
+    Uses `annotate_failed_url` from daily_note_youtube for the per-line write.
+    The file is re-read between annotations so line indices stay correct
+    after each insert.
+    """
+    for url, reason in failed_urls:
+        try:
+            content = read_text_with_retry(note_path)
+        except OSError as exc:
+            print(
+                f"[scrape] could not re-read {note_path.name} to annotate {url}: {exc}",
+                file=sys.stderr,
+            )
+            return
+
+        line_index = None
+        for idx, line in enumerate(content.splitlines()):
+            if url in line:
+                line_index = idx
+                break
+        if line_index is None:
+            print(
+                f"[scrape] could not locate {url} in {note_path.name} to annotate",
+                file=sys.stderr,
+            )
+            continue
+
+        if annotate_failed_url(note_path, line_index, url, reason):
+            print(f"[scrape] annotated fail line for {url} in {note_path.name}")
+        else:
+            print(
+                f"[scrape] could not annotate fail line for {url} in {note_path.name}",
+                file=sys.stderr,
+            )
+
+
 def ocr_image_file(image_path: Path) -> str:
     """Use macOS Vision framework via Swift subprocess for local OCR."""
     result = subprocess.run(
@@ -319,7 +360,7 @@ def main() -> int:
         try:
             content = read_text_with_retry(note_path).strip()
             youtube_urls, remaining_content = extract_bare_youtube_urls(content)
-            failed_urls: list[str] = []
+            failed_urls: list[tuple[str, str]] = []
             succeeded_urls: list[str] = []
 
             if youtube_urls:
@@ -346,10 +387,11 @@ def main() -> int:
                             succeeded_urls.append(url)
                             print(f"[scrape] processed YouTube URL from {note_path.name}: {metadata['title']}")
                         except Exception as exc:
+                            reason = str(exc).strip() or exc.__class__.__name__
                             youtube_skipped += 1
-                            failed_urls.append(url)
+                            failed_urls.append((url, reason))
                             print(
-                                f"[scrape] skipped YouTube URL from {note_path.name}: {url} ({exc})",
+                                f"[scrape] skipped YouTube URL from {note_path.name}: {url} ({reason})",
                                 file=sys.stderr,
                             )
 
@@ -366,6 +408,7 @@ def main() -> int:
                     continue
 
                 if failed_urls:
+                    _annotate_failed_urls_in_note(note_path, failed_urls)
                     print(
                         f"[scrape] leaving {note_path.name} in place for {len(failed_urls)} failed YouTube URL(s)",
                         file=sys.stderr,
@@ -435,6 +478,7 @@ def main() -> int:
             print(f"[scrape] wrote {destination}")
 
             if failed_urls:
+                _annotate_failed_urls_in_note(note_path, failed_urls)
                 print(
                     f"[scrape] leaving {note_path.name} in place for {len(failed_urls)} failed YouTube URL(s)",
                     file=sys.stderr,

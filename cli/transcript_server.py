@@ -176,9 +176,10 @@ class TranscriptService:
             if daily_note_path.exists()
             else ""
         )
+        cleaned_existing = existing_content.rstrip("\n")
         write_text_with_retry(
             daily_note_path,
-            f"{existing_content.rstrip('\n')}\n{cleaned_url}\n",
+            f"{cleaned_existing}\n{cleaned_url}\n",
         )
         return {"status": "ok"}
 

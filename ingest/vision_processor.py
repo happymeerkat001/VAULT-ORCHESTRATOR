@@ -62,9 +62,10 @@ def _process_note(note_path):
             )
             
             transcription = response.content[0].text
-            
+
             # Replace ![image] with ![Processed] and append the text
-            new_block = f"![Processed]({img_url})\n\n> [!abstract] AI Vision Transcription\n> {transcription.replace('\\n', '\\n> ')}\n"
+            indented = transcription.replace("\n", "\n> ")
+            new_block = f"![Processed]({img_url})\n\n> [!abstract] AI Vision Transcription\n> {indented}\n"
             content = content.replace(f"![image]({img_url})", new_block)
             
         except Exception as e:

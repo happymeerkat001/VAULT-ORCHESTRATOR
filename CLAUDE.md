@@ -63,8 +63,13 @@ Failed items are deliberately sticky: a single bad task never blocks downstream 
 # Transcript.lol integration
 python3 cli/export_transcripts.py [--dry-run] [--output-dir <dir>]  # export completed Transcript.lol recordings
 python3 cli/transcribe.py <URL> [--test-auth]                       # print transcript; Vimeo tries captions first
-python3 cli/transcript.py <URL...> [--append-links-to-note <path>]  # save transcripts into z.Ingestion/
+python3 cli/transcript.py <URL>... [--append-links-to-note <path>]  # save transcripts into z.Ingestion/
 python3 cli/transcript_server.py                                    # local Chrome extension bridge on port 8765
+
+# Preflight syntax check (scheduled via launchd every 5 min)
+python3 cli/preflight.py [--root <repo>] [--quiet]   # py_compile cli/ ingest/ scripts/
+                                                       # Logs: ~/.claude/logs/preflight.{out,err}.log
+                                                       # Plist: ~/Library/LaunchAgents/com.leon.preflight.python.plist
 
 # Post-processing
 python3 scripts/process_ingest.py       # batch-OCR images in z.Ingestion/, upload to Imgur
@@ -92,7 +97,18 @@ scripts/    Post-processing (process_ingest.py: image OCR + Imgur archival).
 
 Each ingest script is self-contained: fetch → format → write. The `deliver/` directory exists for convention but output is handled by `append_to_note()` defined inside each ingest script.
 
-Archive pipeline writes to `z.Ingestion/` in the vault. `process_ingest.py` runs after archival to OCR embedded images and replace local/remote links with Imgur-hosted URLs.
+### Archive pipeline writes to `z.Ingestion/` in the vault. `process_ingest.py` runs after archival to OCR embedded images and replace local/remote links with Imgur-hosted URLs.
+
+### Failed YouTube URL handling
+
+When `cli/scrape_notes.py` or `cli/daily_note_youtube.py` cannot ingest a bare YouTube URL (private video, removed, sign-in required, network error, etc.), the URL line is left in place in the daily note and a short reason is written directly below it:
+
+```
+https://www.youtube.com/watch?v=OUAhe1JJtGg
+fail: private video
+```
+
+Reason mapping is in `cli/daily_note_youtube.py:shorten_reason()`. The annotation is idempotent: re-running the scraper replaces an existing `fail:` line on the next line rather than duplicating. The daily note is **not** moved to `processed/` if any of its YouTube URLs failed — it stays in the vault root so the URL is retried on the next run.
 
 ### Important transcript examples
 
@@ -153,6 +169,12 @@ Daily pipeline runs at 5:47 AM via macOS LaunchAgent:
 - Plist: `~/Library/LaunchAgents/com.leon.briefing.daily.plist`
 - Entrypoint: `~/.claude/scripts/run-briefing.sh` → `briefing_sync.py`
 - Logs: `~/.claude/logs/launchd-briefing.*.log`
+
+Preflight syntax check runs every 5 minutes via macOS LaunchAgent:
+- Plist: `~/Library/LaunchAgents/com.leon.preflight.python.plist`
+- Entrypoint: `python3 cli/preflight.py --quiet`
+- Logs: `~/.claude/logs/preflight.{out,err,log}.log`
+- Failure (any `.py` in `cli/`, `ingest/`, or `scripts/` fails to compile) → non-zero exit, captured in `preflight.err.log`. Re-run `python3 cli/preflight.py` from the repo root to see the full traceback.
 
 Scripts must tolerate `EDEADLK` from iCloud file locks (see retry pattern above).
 

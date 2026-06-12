@@ -16,6 +16,7 @@ from datetime import date
 from pathlib import Path
 import re
 import sys
+import time
 
 from archive_youtube import fetch_youtube_metadata
 from export_transcripts import DEFAULT_OUTPUT_DIR, ensure_daily_note_link, extract_youtube_id, sanitize_title
@@ -110,6 +111,92 @@ def replace_url_line(note_path: Path, line_index: int, url: str, replacement: st
     return True
 
 
+def _retry_write(path: Path, content: str, attempts: int = 10, delay_s: float = 1.0) -> None:
+    last_exc: Exception | None = None
+    for _ in range(max(1, attempts)):
+        try:
+            path.write_text(content, encoding="utf-8")
+            return
+        except OSError as exc:
+            last_exc = exc
+            time.sleep(delay_s)
+    raise last_exc or OSError(f"Unable to write {path}")
+
+
+def annotate_failed_url(note_path: Path, line_index: int, url: str, reason: str) -> bool:
+    """Insert a `fail: <reason>` line directly below the failed URL.
+
+    Idempotent: if a `fail:` line already exists on the line right after the
+    URL, it's replaced instead of duplicated. The URL line itself is left
+    intact so a later re-run can still pick it up.
+    """
+    if not note_path.exists():
+        return False
+
+    try:
+        existing = note_path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+    lines = existing.splitlines()
+    if line_index >= len(lines):
+        return False
+    if url not in lines[line_index]:
+        return False
+
+    safe_reason = shorten_reason(reason)
+    fail_line = f"fail: {safe_reason}"
+
+    next_idx = line_index + 1
+    if next_idx < len(lines) and lines[next_idx].lstrip().startswith("fail:"):
+        lines[next_idx] = fail_line
+    else:
+        lines.insert(next_idx, fail_line)
+
+    updated = "\n".join(lines)
+    if existing.endswith("\n"):
+        updated += "\n"
+    _retry_write(note_path, updated)
+    return True
+
+
+_REASON_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"Private video", re.IGNORECASE), "private video"),
+    (re.compile(r"Video unavailable", re.IGNORECASE), "video unavailable"),
+    (re.compile(r"This video is no longer available", re.IGNORECASE), "video removed"),
+    (re.compile(r"SIGN IN to confirm", re.IGNORECASE), "age-restricted / sign-in required"),
+    (re.compile(r"HTTP Error 404", re.IGNORECASE), "not found (404)"),
+    (re.compile(r"HTTP Error 403", re.IGNORECASE), "forbidden (403)"),
+    (re.compile(r"Connection refused|Connection reset", re.IGNORECASE), "connection error"),
+    (re.compile(r"timed out|Timeout", re.IGNORECASE), "timeout"),
+    (re.compile(r"name resolution|DNS", re.IGNORECASE), "DNS error"),
+    (re.compile(r"SSL: CERTIFICATE_VERIFY_FAILED", re.IGNORECASE), "TLS certificate error"),
+    (re.compile(r"Invalid YouTube URL", re.IGNORECASE), "invalid YouTube URL"),
+)
+
+
+def shorten_reason(reason: str, max_len: int = 120) -> str:
+    """Map verbose yt-dlp / urllib errors to a short, human-readable tag.
+
+    Falls back to the first line of the original reason, truncated to
+    `max_len` characters.
+    """
+    raw = (reason or "").strip().replace("\n", " ")
+    if not raw:
+        return "unknown error"
+
+    for pattern, label in _REASON_PATTERNS:
+        if pattern.search(raw):
+            return label
+
+    first = raw.split(" See ", 1)[0]
+    first = first.split(" Also see ", 1)[0]
+    first = first.strip().strip(".")
+    if len(first) > max_len:
+        first = first[: max_len - 1].rstrip() + "…"
+    return first or "unknown error"
+
+
 def main() -> int:
     args = parse_args()
     note_date = validate_note_date(args.date)
@@ -137,7 +224,11 @@ def main() -> int:
             video_id = extract_youtube_id(item.url)
             if not video_id:
                 skipped_invalid += 1
-                print(f"[daily-note-youtube] skip invalid URL: {item.url}")
+                reason = f"Invalid YouTube URL: {item.url}"
+                if annotate_failed_url(note_path, item.line_index, item.url, reason):
+                    print(f"[daily-note-youtube] fail {item.url}: {reason} (annotated)")
+                else:
+                    print(f"[daily-note-youtube] fail {item.url}: {reason} (annotation failed)")
                 continue
 
             metadata = fetch_youtube_metadata(video_id)
@@ -188,7 +279,17 @@ def main() -> int:
             seen_destinations.add(destination)
         except Exception as exc:
             skipped_invalid += 1
-            print(f"[daily-note-youtube] skip {item.url}: {exc}")
+            reason = str(exc).strip() or exc.__class__.__name__
+            if annotate_failed_url(note_path, item.line_index, item.url, reason):
+                print(
+                    f"[daily-note-youtube] fail {item.url}: {reason} "
+                    f"(annotated line {item.line_index + 2} of {note_path.name})"
+                )
+            else:
+                print(
+                    f"[daily-note-youtube] fail {item.url}: {reason} "
+                    f"(could not annotate {note_path.name})"
+                )
 
     print(
         "[daily-note-youtube] summary: "
