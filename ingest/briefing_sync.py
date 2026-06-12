@@ -544,7 +544,7 @@ def generate_briefing(payload: dict, minimax_api_key: str) -> str:
 
 def read_text_with_retry(
     path: Path,
-    attempts: int = 10,
+    attempts: int = 30,
     initial_delay: float = 0.5,
     max_delay: float = 4.0,
 ) -> str:
@@ -561,7 +561,7 @@ def read_text_with_retry(
 def write_text_with_retry(
     path: Path,
     content: str,
-    attempts: int = 10,
+    attempts: int = 30,
     initial_delay: float = 0.5,
     max_delay: float = 4.0,
 ) -> None:
