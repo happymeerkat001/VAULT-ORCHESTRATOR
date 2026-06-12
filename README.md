@@ -149,10 +149,16 @@ Pull sessions for a specific past date (e.g. backfill missed days):
 python3 ingest/hedy_sync.py --date 2026-05-28
 ```
 
+Pull sessions for an inclusive date range:
+
+```sh
+python3 ingest/hedy_sync.py --date 2026-05-28 --to 2026-06-12
+```
+
 That command:
 
 - Authenticates against `https://api.hedy.bot/sessions` using `HEDY_AI_API_KEY` from `.env`
-- Fetches the 10 most recent sessions, filters to today
+- Fetches the 10 most recent sessions for single-date syncs, or 100 sessions for range syncs
 - Writes formatted recaps + to-dos into `Hedy-AI/YYYY-MM-DD.md`
 - Extracts transcripts into `Hedy-AI/transcript YYYY-MM-DD.md`
 - Auto-links keywords to vault pages via `KEYWORD_MAP`

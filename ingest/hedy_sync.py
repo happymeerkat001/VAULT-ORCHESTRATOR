@@ -23,7 +23,7 @@ import re
 import sys
 import urllib.request
 import urllib.error
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 try:
@@ -62,7 +62,6 @@ ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 LOCAL_TIMEZONE = "America/Chicago"
 
 HEDY_BASE_URL = "https://api.hedy.bot"
-HEDY_SESSIONS_URL = "https://api.hedy.bot/sessions?limit=10"
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -116,9 +115,9 @@ def fetch_session_detail(api_key: str, session_id: str) -> dict:
     return {}
 
 
-def fetch_sessions(api_key: str) -> list[dict]:
+def fetch_sessions(api_key: str, limit: int = 10) -> list[dict]:
     """Fetch session list then enrich each entry with full detail."""
-    raw = _hedy_get(api_key, HEDY_SESSIONS_URL)
+    raw = _hedy_get(api_key, f"{HEDY_BASE_URL}/sessions?limit={limit}")
     summaries: list[dict] = raw if isinstance(raw, list) else next(
         (v for v in raw.values() if isinstance(v, list)), []
     )
@@ -182,88 +181,116 @@ def inject_success_callout(note_path: Path, count: int) -> None:
     note_path.write_text("".join(lines), encoding="utf-8")
 
 
+def sync_date(date: str, all_sessions: list[dict]) -> None:
+    note_path = hedy_note_path(date)
+    print(f"[hedy_sync] date={date}  note={note_path}")
+
+    dated_sessions = [s for s in all_sessions if session_date(s) == date]
+    print(f"[hedy_sync] total={len(all_sessions)}  date={len(dated_sessions)}")
+
+    if not dated_sessions:
+        print(f"[hedy_sync] No Hedy sessions for {date}. Nothing to append.")
+        return
+
+    ensure_daily_note_link(date)
+
+    existing_titles = get_existing_session_titles(note_path)
+    new_sessions = [
+        s for s in dated_sessions
+        if (s.get("title") or s.get("name") or "Untitled Session").strip()
+        not in existing_titles
+    ]
+
+    if not new_sessions:
+        wrote_transcript = write_transcript_note(dated_sessions, date)
+        if wrote_transcript or transcript_note_path(date).exists():
+            ensure_transcript_link(note_path, date)
+        print(f"[hedy_sync] All {len(dated_sessions)} session(s) already present. Nothing to do.")
+        return
+
+    output = build_sessions_output(note_path, new_sessions, date)
+
+    note_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(note_path, "a", encoding="utf-8") as f:
+        f.write(output)
+    print(f"[hedy_sync] Appended {len(new_sessions)} new session(s) to {note_path}")
+
+    wrote_transcript = write_transcript_note(dated_sessions, date)
+    if wrote_transcript or transcript_note_path(date).exists():
+        ensure_transcript_link(note_path, date)
+
+    inject_success_callout(note_path, len(new_sessions))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Sync Hedy AI sessions to Obsidian")
     parser.add_argument(
         "--date", metavar="YYYY-MM-DD",
         help="Pull sessions for a specific date instead of today",
     )
+    parser.add_argument(
+        "--to", metavar="YYYY-MM-DD",
+        help="End date for range sync (requires --date as start)",
+    )
     args = parser.parse_args()
+
+    start_date = None
+    end_date = None
+
+    if args.to and not args.date:
+        print("[ERROR] --to requires --date", file=sys.stderr)
+        sys.exit(1)
 
     if args.date:
         try:
-            datetime.strptime(args.date, "%Y-%m-%d")
+            start_date = datetime.strptime(args.date, "%Y-%m-%d")
         except ValueError:
             print(f"[ERROR] Invalid date format: {args.date} (expected YYYY-MM-DD)", file=sys.stderr)
             sys.exit(1)
 
-    today = args.date or today_local()
-    note_path = hedy_note_path(today)
-    print(f"[hedy_sync] date={today}  note={note_path}")
+    if args.to:
+        try:
+            end_date = datetime.strptime(args.to, "%Y-%m-%d")
+        except ValueError:
+            print(f"[ERROR] Invalid date format: {args.to} (expected YYYY-MM-DD)", file=sys.stderr)
+            sys.exit(1)
+        if end_date < start_date:
+            print("[ERROR] --to cannot be before --date", file=sys.stderr)
+            sys.exit(1)
+
+    target_date = args.date or today_local()
+    error_note_path = hedy_note_path(target_date)
 
     # 1. Load credentials
     try:
         api_key = load_hedy_api_key()
     except (json.JSONDecodeError, ValueError) as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)
-        write_error_callout(note_path, str(exc))
+        write_error_callout(error_note_path, str(exc))
         sys.exit(1)
 
     # 2. Fetch sessions
     try:
-        all_sessions = fetch_sessions(api_key)
+        all_sessions = fetch_sessions(api_key, limit=100 if end_date else 10)
     except urllib.error.HTTPError as exc:
         msg = f"HTTP {exc.code} from Hedy API"
         print(f"[ERROR] {msg}", file=sys.stderr)
-        write_error_callout(note_path, msg)
+        write_error_callout(error_note_path, msg)
         sys.exit(1)
     except Exception as exc:
         msg = f"Network/parse error: {exc}"
         print(f"[ERROR] {msg}", file=sys.stderr)
-        write_error_callout(note_path, msg)
+        write_error_callout(error_note_path, msg)
         sys.exit(1)
 
-    # 3. Filter to today's sessions only
-    todays = [s for s in all_sessions if session_date(s) == today]
-    print(f"[hedy_sync] total={len(all_sessions)}  today={len(todays)}")
-
-    if not todays:
-        print(f"[hedy_sync] No Hedy sessions for {today}. Nothing to append.")
+    if end_date:
+        current = start_date
+        while current <= end_date:
+            sync_date(current.strftime("%Y-%m-%d"), all_sessions)
+            current += timedelta(days=1)
         return
 
-    ensure_daily_note_link(today)
-
-    # 4. Idempotency — skip sessions already written
-    existing_titles = get_existing_session_titles(note_path)
-    new_sessions = [
-        s for s in todays
-        if (s.get("title") or s.get("name") or "Untitled Session").strip()
-        not in existing_titles
-    ]
-
-    if not new_sessions:
-        wrote_transcript = write_transcript_note(todays, today)
-        if wrote_transcript or transcript_note_path(today).exists():
-            ensure_transcript_link(note_path, today)
-        print(f"[hedy_sync] All {len(todays)} session(s) already present. Nothing to do.")
-        return
-
-    # 5. Build output block
-    output = build_sessions_output(note_path, new_sessions, today)
-
-    # 6. Append
-    note_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(note_path, "a", encoding="utf-8") as f:
-        f.write(output)
-    print(f"[hedy_sync] Appended {len(new_sessions)} new session(s) to {note_path}")
-
-    # 7. Write transcripts to Hedy-AI/YYYY-MM-DD.md
-    wrote_transcript = write_transcript_note(todays, today)
-    if wrote_transcript or transcript_note_path(today).exists():
-        ensure_transcript_link(note_path, today)
-
-    # 8. Inject success callout near top of note
-    inject_success_callout(note_path, len(new_sessions))
+    sync_date(target_date, all_sessions)
 
 
 if __name__ == "__main__":
