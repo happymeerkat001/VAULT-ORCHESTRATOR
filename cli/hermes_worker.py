@@ -28,6 +28,7 @@ itself (the LLM must not edit that section directly).
 """
 
 import argparse
+import fcntl
 import json
 import os
 import random
@@ -54,6 +55,13 @@ HERMES_HEADER = "## Hermes-to-do 🪶"
 MINIMAX_URL = "https://api.minimaxi.chat/v1/chat/completions"
 MAX_LOOP_ITERATIONS = 20
 MAX_WALL_SECONDS = 180
+# After this many failed runs, a task is marked sticky-failed (`- [!]`) instead
+# of being restored to open. Stops infinite retry loops on persistent failures.
+MAX_TASK_RETRIES = 2
+# Singleton lock so launchd can't start a second worker while a long-budget
+# task is still mid-flight (two ticks writing the daily note concurrently is
+# how duplicate task lines are born).
+LOCK_PATH = Path.home() / ".claude" / "logs" / "hermes-worker.lock"
 # How long a single web_fetch / web_search call may run before we kill it.
 WEB_TOOL_TIMEOUT = 30
 # Hard cap on response size from a single web_fetch (chars). Keeps one page
@@ -130,12 +138,12 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "Read the UTF-8 text of a file inside the vault. Returns up to N lines.",
+            "description": "Read the UTF-8 text of a file inside the vault. Returns up to N lines (clamped to a hard ceiling of 300 lines per call to protect the context budget; if you need more, re-read with a tighter scope).",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "Path relative to the vault, or absolute path inside the vault."},
-                    "max_lines": {"type": "integer", "description": "Cap on lines returned (default 200)."},
+                    "max_lines": {"type": "integer", "description": "Cap on lines returned (default 200, hard ceiling 300)."},
                 },
                 "required": ["path"],
             },
@@ -265,6 +273,11 @@ TOOLS = [
 
 
 def _read_text_with_retry(path: Path, attempts: int = 5) -> str:
+    # Backwards-compat shim for any external caller. The default 5x/0.4s
+    # budget is no longer the right answer for iCloud-resident files — see
+    # _read_text_with_iCloud_retry below. New code should call the iCloud
+    # variant directly; this shim stays because the third-party tools
+    # (ingest scripts, ad-hoc callers) still rely on the 5-arg signature.
     last = None
     for i in range(attempts):
         try:
@@ -286,6 +299,242 @@ def _write_text_with_retry(path: Path, content: str, attempts: int = 5) -> None:
             last = exc
             time.sleep(0.4 * (2 ** i))
     raise last  # type: ignore[misc]
+
+
+# ---------------------- iCloud EDEADLK self-heal -----------------------------
+#
+# iCloud (the Apple "CloudDocs" daemon, com.apple.CloudDocs) holds a
+# byte-range lock on every iCloud-resident file the first time a process
+# opens it. If the local copy has been evicted to the cloud, macOS
+# blocks the read with errno 11 (EDEADLK, "Resource deadlock avoided") or
+# errno 35 (EAGAIN, "Resource temporarily unavailable") until the file
+# has been re-materialized from iCloud. The default Python read path
+# surfaces that as a plain OSError, and the only way to break the lock
+# is to ask the daemon to re-download the file via `brctl download`.
+#
+# The previous retry loop (5 attempts, ~12s total backoff) gave up before
+# iCloud released the lock, so every read_file call against an evicted
+# transcript (HT102, and any other iCloud-cold file the task happens to
+# point at) returned "Resource deadlock avoided" and the LLM aborted.
+# The fix is two layers:
+#
+#   1. _ensure_icloud_downloaded(path) shells out to `brctl download`
+#      (macOS built-in, no new deps) on the first EDEADLK/EAGAIN. The
+#      daemon is async, so the helper then polls with the same jittered
+#      backoff the daily-note reads use.
+#
+#   2. _read_text_with_iCloud_retry wraps the read with the daily-note
+#      retry budget (10 attempts, 1s base, 32s cap) and triggers the
+#      download helper on the first lock error. This fixes read_file for
+#      every vault file, not just the daily note.
+#
+# `brctl` is only present on macOS, so the helpers fall back to a plain
+# retry on other platforms (where errno 11/35 is never produced anyway).
+_ICLOUD_LOCK_ERRNOS = (11, 35)  # EDEADLK, EAGAIN
+
+
+def _is_icloud_lock_error(exc: BaseException) -> bool:
+    """Return True if `exc` looks like an iCloud materialization lock.
+
+    EDEADLK (11) is the canonical "Resource deadlock avoided" Python
+    surfaces from macOS during iCloud cold reads. EAGAIN (35) is the
+    byte-range-lock counterpart the daemon can also raise. Anything
+    else (FileNotFoundError, IsADirectoryError, PermissionError) is a
+    real read error and should not trigger a `brctl download`.
+    """
+    errno = getattr(exc, "errno", None)
+    if errno in _ICLOUD_LOCK_ERRNOS:
+        return True
+    msg = str(exc).lower()
+    return "resource deadlock" in msg or "resource temporarily unavailable" in msg
+
+
+def _ensure_icloud_downloaded(path: Path, attempts: int = 6) -> bool:
+    """Ask iCloud to materialize `path`, then poll until readable.
+
+    Returns True if the file is readable (or was never iCloud-locked).
+    Returns False if `brctl` is missing, the file is outside the iCloud
+    container, or the daemon hasn't finished the download within the
+    attempt budget. Non-macOS platforms are a no-op (return True).
+    Stdlib subprocess only; no new dependencies.
+    """
+    if sys.platform != "darwin":
+        return True
+    if not path.exists():
+        return False
+    # Kick the daemon. brctl download is async — it returns ~immediately
+    # and the file becomes readable once the download completes. We fire
+    # one call and then poll the read; if the poll keeps EDEADLK'ing,
+    # try one more download (in case the daemon dropped the request).
+    brctl = shutil.which("brctl")
+    if not brctl:
+        return False
+    target = str(path)
+    try:
+        subprocess.run(
+            [brctl, "download", target],
+            capture_output=True,
+            timeout=10,
+        )
+    except (subprocess.SubprocessError, OSError):
+        # brctl returning non-zero is not fatal — the daemon sometimes
+        # errors on paths that are already local. Keep polling.
+        pass
+    for i in range(attempts):
+        try:
+            # A 0-byte open + immediate close is enough to detect "the
+            # lock is gone" without materializing the full content. Use
+            # the same backoff curve as the daily-note reads.
+            with open(path, "rb") as fh:
+                fh.read(1)
+            return True
+        except OSError as exc:
+            if not _is_icloud_lock_error(exc) and i > 0:
+                # Stop early on a real I/O error (permission, missing
+                # file, etc.) — further brctl calls won't help.
+                return False
+            delay = min(1.0 * (2 ** i), 16.0)
+            delay = delay * (0.8 + random.random() * 0.4)
+            time.sleep(delay)
+        if i in (1, 3):
+            # Re-kick the daemon a couple of times in case the first
+            # request was coalesced or dropped. Cheap; brctl is idempotent.
+            try:
+                subprocess.run(
+                    [brctl, "download", target],
+                    capture_output=True,
+                    timeout=10,
+                )
+            except (subprocess.SubprocessError, OSError):
+                pass
+    return False
+
+
+def _read_text_with_iCloud_retry(path: Path) -> str:
+    """Read `path` with a long, jittered retry budget and iCloud self-heal.
+
+    This replaces the old `_read_text_with_retry` for the worker tool set.
+    On the first EDEADLK/EAGAIN, shell out to `brctl download` to ask
+    iCloud to materialize the file, then continue polling. Same budget
+    shape as `_read_daily_note_with_retry` (10 attempts, 1s base, 32s
+    cap, ±20% jitter) so a single helper covers both the daily note and
+    every other iCloud-resident file in the vault.
+    """
+    last: Exception | None = None
+    triggered = False
+    for i in range(DAILY_NOTE_READ_ATTEMPTS):
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError as exc:
+            last = exc
+            if _is_icloud_lock_error(exc) and not triggered:
+                # One-shot: shell out to brctl exactly once on the first
+                # lock error. If that doesn't unstick the file, the
+                # remaining retries just sleep and try again. We don't
+                # spam brctl on every iteration — the daemon is async
+                # and the call doesn't return until the file is local.
+                triggered = True
+                _ensure_icloud_downloaded(path)
+                continue
+            if i == DAILY_NOTE_READ_ATTEMPTS - 1:
+                break
+            delay = min(DAILY_NOTE_READ_BASE_DELAY * (2 ** i), DAILY_NOTE_READ_MAX_DELAY)
+            delay = delay * (0.8 + random.random() * 0.4)
+            time.sleep(delay)
+    assert last is not None
+    raise last
+
+
+# Sentinel prefix returned by `tool_read_file` when the file is still
+# iCloud-locked after exhausting the retry budget. The LLM sees a soft
+# message instead of a raised exception, so it can keep working on
+# other files in the run and circle back to the locked one later. The
+# sentinel is parseable by the LLM but unlikely to appear naturally in
+# a vault file, so there's no ambiguity in the tool output.
+_ICLOUD_LOCK_SENTINEL = "(file locked by iCloud sync — download queued, retry this file later in the run)"
+
+
+def _preflight_icloud_downloads(task_text: str, today: str, timeout: int = 30) -> list[str]:
+    """Kick `brctl download` in parallel for every file the task touches.
+
+    Best-effort: returns a list of paths that are STILL iCloud-locked
+    after the warm-up window. The caller (run_task) can then choose to
+    fail fast ("source files evicted from iCloud") instead of burning
+    the whole 1200s budget on 20 failed read attempts.
+
+    Walks:
+      - every absolute .md path mentioned in the task (extracted by
+        extract_absolute_md_paths)
+      - every absolute folder mentioned in the task, recursively for
+        any .md inside (transcript folders like HT102, transcript.lol
+        dumps, etc.)
+      - the inferred target note path
+    Non-macOS platforms return an empty list (no iCloud).
+    """
+    if sys.platform != "darwin":
+        return []
+    brctl = shutil.which("brctl")
+    if not brctl:
+        return []
+
+    candidates: set[Path] = set()
+    for raw in extract_absolute_md_paths(task_text):
+        p = Path(raw).expanduser()
+        if p.is_file():
+            candidates.add(p)
+        elif p.is_dir():
+            for child in p.rglob("*.md"):
+                if child.is_file():
+                    candidates.add(child)
+    target = infer_target_note_path(task_text)
+    if target:
+        p = Path(target).expanduser()
+        if p.is_file():
+            candidates.add(p)
+
+    if not candidates:
+        return []
+
+    # Fire all downloads in parallel. brctl download is async, so the
+    # subprocess.run calls return quickly even for big files. We use
+    # threads instead of processes — the only blocking work is the
+    # brctl subprocess itself.
+    import threading
+
+    def _kick(path: Path) -> None:
+        try:
+            subprocess.run(
+                [brctl, "download", str(path)],
+                capture_output=True,
+                timeout=timeout,
+            )
+        except (subprocess.SubprocessError, OSError):
+            pass
+
+    threads = [threading.Thread(target=_kick, args=(p,), daemon=True) for p in candidates]
+    for t in threads:
+        t.start()
+    # Give the daemon a chance to do the work. The 30s default is
+    # generous for a single vault tree; preflight costs at most 30s +
+    # the per-file poll in _ensure_icloud_downloaded when the LLM
+    # later reads the file.
+    deadline = time.time() + timeout
+    for t in threads:
+        remaining = max(0.1, deadline - time.time())
+        t.join(timeout=remaining)
+        if time.time() > deadline:
+            break
+
+    # Verify: which of the candidates are STILL EDEADLK after warm-up?
+    still_locked: list[str] = []
+    for p in candidates:
+        try:
+            with open(p, "rb") as fh:
+                fh.read(1)
+        except OSError as exc:
+            if _is_icloud_lock_error(exc):
+                still_locked.append(str(p))
+    return still_locked
 
 
 # iCloud aggressively holds file locks on the daily note (Obsidian itself is
@@ -346,17 +595,38 @@ def _write_daily_note_with_retry(path: Path, content: str) -> None:
     raise last
 
 
+# Hard ceiling on read_file's max_lines. The model can ask for more, but
+# the worker clamps to 300 lines per read so a single transcript folder
+# can't blow out the LLM context window. Pairs with the context-trim
+# guard in run_task: this stops a single tool call from overshooting,
+# the trim guard catches sustained growth across many calls. 300 lines
+# of prose is roughly 12-15k tokens; well below the per-call budget and
+# enough for any sensible summary.
+MAX_READ_FILE_LINES = 300
+
+
 def tool_read_file(args: dict) -> str:
     p = safe_path(args["path"])
     if not p.exists():
         return "(file does not exist)"
     if p.is_dir():
         return "(path is a directory; use list_directory)"
-    text = _read_text_with_retry(p)
-    limit = int(args.get("max_lines") or 200)
+    try:
+        text = _read_text_with_iCloud_retry(p)
+    except OSError as exc:
+        if _is_icloud_lock_error(exc):
+            # Self-heal: the file is iCloud-locked and our retry budget
+            # did not free it. Return a soft message so the LLM keeps
+            # working on other files in the run and circles back to
+            # this one in a later iteration. Raising here would abort
+            # the whole task on a single cold file.
+            return _ICLOUD_LOCK_SENTINEL + " (%s)" % exc
+        raise
+    requested = int(args.get("max_lines") or 200)
+    limit = min(max(1, requested), MAX_READ_FILE_LINES)
     lines = text.splitlines()
     if len(lines) > limit:
-        return "\n".join(lines[:limit]) + "\n…(truncated at %d lines)" % limit
+        return "\n".join(lines[:limit]) + "\n…(truncated at %d lines; raise max_lines or re-read with a wider scope to see more)" % limit
     return text
 
 
@@ -746,6 +1016,64 @@ def infer_target_note_path(task_text: str) -> str:
 
 # ----------------------- daily-note mutation --------------------------------
 
+def _normalize_task_signature(text: str) -> str:
+    """Reduce a checkbox line (or raw task text) to a comparable signature.
+
+    Strips the leading `- [x|~|!| ]` marker, any trailing worker suffixes
+    (`_(running)_`, `_(→ see ...)_`, `_(failed: ...)_`), and collapses
+    whitespace, lowercased. Used to re-locate a task by content.
+    """
+    t = re.sub(r"^- \[[ x~!]\]\s*", "", text.strip(), flags=re.IGNORECASE)
+    t = re.sub(r"(\s*_\([^_]*\)_)+\s*$", "", t)
+    return re.sub(r"\s+", " ", t).strip().lower()
+
+
+def _locate_task_line(lines: list[str], line_idx: int, task_text: str) -> int:
+    """Re-locate the task's checkbox line by CONTENT, tolerating line shifts.
+
+    The daily note is concurrently mutated (ingest scripts, iPhone edits,
+    iCloud merges) between the time a task is picked and the time its state
+    is written back — especially under long [NNNs] budgets. Writing by the
+    stale captured index stomps unrelated lines and leaves stale `- [~]`
+    markers + duplicates. So: trust the index only if it still holds the
+    same task; otherwise scan the Hermes section (then the whole file) for
+    a checkbox line matching the task's text signature.
+
+    Returns -1 if the task line no longer exists anywhere (e.g. the user
+    deleted it mid-run); callers must skip the write in that case.
+    """
+    sig = _normalize_task_signature(task_text)
+    if not sig:
+        return -1
+    if 0 <= line_idx < len(lines):
+        cand = lines[line_idx].strip()
+        if cand.startswith("- [") and _normalize_task_signature(cand).startswith(sig):
+            return line_idx
+    # Scan the Hermes section first.
+    start = -1
+    for i, l in enumerate(lines):
+        if l.strip() == HERMES_HEADER:
+            start = i
+            break
+    if start >= 0:
+        end = len(lines)
+        for j in range(start + 1, len(lines)):
+            s = lines[j].strip()
+            if s.startswith("# ") or s.startswith("## "):
+                end = j
+                break
+        for k in range(start + 1, end):
+            s = lines[k].strip()
+            if s.startswith("- [") and _normalize_task_signature(s).startswith(sig):
+                return k
+    # Last resort: whole-file scan (handles a header rename mid-run).
+    for k, l in enumerate(lines):
+        s = l.strip()
+        if s.startswith("- [") and _normalize_task_signature(s).startswith(sig):
+            return k
+    return -1
+
+
 def mark_in_progress(note_path: Path, line_idx: int, task_text: str) -> None:
     """Rewrite a `- [ ]` line as `- [~] ... _(running)_` and write back.
 
@@ -758,8 +1086,11 @@ def mark_in_progress(note_path: Path, line_idx: int, task_text: str) -> None:
     for attempt in range(DAILY_NOTE_READ_ATTEMPTS):
         try:
             lines = _read_daily_note_with_retry(note_path).splitlines()
-            if line_idx < len(lines):
-                lines[line_idx] = "- [~] " + task_text + "  _(running)_"
+            idx = _locate_task_line(lines, line_idx, task_text)
+            if idx < 0:
+                print("[worker] mark_in_progress: task line not found; skipping write")
+                return
+            lines[idx] = "- [~] " + task_text + "  _(running)_"
             _write_daily_note_with_retry(note_path, "\n".join(lines) + "\n")
             return
         except OSError as exc:
@@ -801,10 +1132,13 @@ def mark_done(
     for attempt in range(DAILY_NOTE_READ_ATTEMPTS):
         try:
             lines = _read_daily_note_with_retry(note_path).splitlines()
-            if line_idx < len(lines):
-                lines[line_idx] = (
-                    "- [x] " + original_text + _format_done_suffix(output_relpath)
-                )
+            idx = _locate_task_line(lines, line_idx, original_text)
+            if idx < 0:
+                print("[worker] mark_done: task line not found; skipping write")
+                return
+            lines[idx] = (
+                "- [x] " + original_text + _format_done_suffix(output_relpath)
+            )
             _write_daily_note_with_retry(note_path, "\n".join(lines) + "\n")
             return
         except OSError as exc:
@@ -819,15 +1153,22 @@ def mark_done(
 
 
 def mark_open(note_path: Path, line_idx: int, original_text: str) -> None:
-    """Restore a task to unchecked/open state after a failed run."""
+    """Restore a task to unchecked/open state after a failed run.
+
+    Annotation contract: per the user's stated preference, the line itself
+    stays as `- [ ] original_text` (unchecked, retryable). Any previously
+    written annotation block directly below the parent is removed first so
+    re-running the worker produces a fresh annotation rather than stacking
+    stale `fail:` lines. If `annotation_lines` is provided, those new lines
+    are appended (each indented with two spaces, matching the existing
+    ingest-worker `fail:` shape).
+    """
+    lines: list[str] | None = None
     last: Exception | None = None
     for attempt in range(DAILY_NOTE_READ_ATTEMPTS):
         try:
             lines = _read_daily_note_with_retry(note_path).splitlines()
-            if line_idx < len(lines):
-                lines[line_idx] = "- [ ] " + original_text
-            _write_daily_note_with_retry(note_path, "\n".join(lines) + "\n")
-            return
+            break
         except OSError as exc:
             last = exc
             if attempt == DAILY_NOTE_READ_ATTEMPTS - 1:
@@ -835,8 +1176,271 @@ def mark_open(note_path: Path, line_idx: int, original_text: str) -> None:
             delay = min(DAILY_NOTE_READ_BASE_DELAY * (2 ** attempt), DAILY_NOTE_READ_MAX_DELAY)
             delay = delay * (0.8 + random.random() * 0.4)
             time.sleep(delay)
+    if lines is None:
+        assert last is not None
+        raise last
+
+    line_idx = _locate_task_line(lines, line_idx, original_text)
+    if line_idx < 0:
+        print("[worker] mark_open: task line not found; skipping write")
+        return
+    # Strip any `_(running)_` suffix that mark_in_progress added so the
+    # restored line is a clean `- [ ] original_text` and not a stale
+    # in-progress marker pretending to be unchecked.
+    lines[line_idx] = "- [ ] " + _strip_running_suffix(original_text)
+
+    # Strip any prior worker annotation block. Worker-emitted annotation
+    # lines are tagged with `<!-- h:... -->` HTML comments so the stripper
+    # can identify them unambiguously without false-positive matching
+    # against user-written indented content. Obsidian renders HTML comments
+    # as nothing, so they are visually invisible but durable for the parser.
+    # (annotate_failure also strips before inserting, but doing it here too
+    # keeps the read-modify-write atomic in case the subsequent annotate
+    # write fails on iCloud EDEADLK.)
+    end = line_idx + 1
+    while end < len(lines) and lines[end].startswith("  ") and "<!-- h:" in lines[end]:
+        end += 1
+    if end > line_idx + 1:
+        del lines[line_idx + 1:end]
+
+    last = None
+    for attempt in range(DAILY_NOTE_WRITE_ATTEMPTS):
+        try:
+            _write_daily_note_with_retry(note_path, "\n".join(lines) + "\n")
+            return
+        except OSError as exc:
+            last = exc
+            if attempt == DAILY_NOTE_WRITE_ATTEMPTS - 1:
+                break
+            delay = min(DAILY_NOTE_READ_BASE_DELAY * (2 ** attempt), DAILY_NOTE_READ_MAX_DELAY)
+            delay = delay * (0.8 + random.random() * 0.4)
+            time.sleep(delay)
     assert last is not None
     raise last
+
+
+def get_retry_count(note_path: Path, line_idx: int, task_text: str) -> int:
+    """Read the retry counter from the worker annotation block under a task.
+
+    The counter is written by annotate_failure as
+    `  <!-- h:retry --> retry: N/M`. Returns 0 when no counter exists
+    (first failure) or the note/line cannot be read.
+    """
+    try:
+        lines = _read_daily_note_with_retry(note_path).splitlines()
+    except OSError:
+        return 0
+    idx = _locate_task_line(lines, line_idx, task_text)
+    if idx < 0:
+        return 0
+    j = idx + 1
+    while j < len(lines) and lines[j].startswith("  ") and "<!-- h:" in lines[j]:
+        m = re.search(r"<!-- h:retry -->\s*retry:\s*(\d+)", lines[j])
+        if m:
+            return int(m.group(1))
+        j += 1
+    return 0
+
+
+def mark_failed(note_path: Path, line_idx: int, original_text: str, reason: str) -> None:
+    """Mark a task sticky-failed: `- [!] text  _(failed: reason)_`.
+
+    Per the documented contract, `- [!]` items are NEVER picked up
+    automatically; the user retries by editing the marker back to `- [ ]`.
+    The worker annotation block below the line is removed — the failure
+    reason now lives inline on the line itself.
+    """
+    short = re.sub(r"\s+", " ", reason).strip()[:160]
+    last: Exception | None = None
+    for attempt in range(DAILY_NOTE_WRITE_ATTEMPTS):
+        try:
+            lines = _read_daily_note_with_retry(note_path).splitlines()
+            idx = _locate_task_line(lines, line_idx, original_text)
+            if idx < 0:
+                print("[worker] mark_failed: task line not found; skipping write")
+                return
+            lines[idx] = (
+                "- [!] " + _strip_running_suffix(original_text)
+                + "  _(failed: %s)_" % short
+            )
+            end = idx + 1
+            while end < len(lines) and lines[end].startswith("  ") and "<!-- h:" in lines[end]:
+                end += 1
+            if end > idx + 1:
+                del lines[idx + 1:end]
+            _write_daily_note_with_retry(note_path, "\n".join(lines) + "\n")
+            return
+        except OSError as exc:
+            last = exc
+            if attempt == DAILY_NOTE_WRITE_ATTEMPTS - 1:
+                break
+            delay = min(DAILY_NOTE_READ_BASE_DELAY * (2 ** attempt), DAILY_NOTE_READ_MAX_DELAY)
+            delay = delay * (0.8 + random.random() * 0.4)
+            time.sleep(delay)
+    assert last is not None
+    raise last
+
+
+def annotate_failure(note_path: Path, line_idx: int, task_text: str, reason: str, suggestion: str, extra: list[str] | None = None) -> None:
+    """Insert a `fail:` annotation block directly below the parent task line.
+
+    Idempotent: any prior worker annotation block directly below `line_idx`
+    is removed first, then the new block is inserted in its place. The
+    block shape is:
+
+        - [ ] original task text
+          <!-- h:fail --> fail: <reason>
+          <!-- h:try -->  try: <suggestion>
+          [<!-- h:split --> split into:]
+          [<!-- h:child --> - [ ] <child>]
+
+    Each line is tagged with an HTML comment marker so the stripper can
+    identify and replace it without false-positive matches on user-written
+    indented content. Obsidian renders the comment marker as nothing, so
+    the visible output is just the indented annotation.
+
+    `extra` is used by `process_one` to append a "split into:" header plus
+    2-4 child task sub-bullets when the failure was a "task too long"
+    timeout/iter-cap. The full read-modify-write happens inside one retry
+    loop so a partial annotation cannot survive an iCloud EDEADLK mid-write.
+    """
+    extras = extra or []
+    # Build the new annotation lines (each starts with two spaces).
+    new_lines: list[str] = ["  <!-- h:fail --> fail: %s" % reason, "  <!-- h:try --> try: %s" % suggestion]
+    for line in extras:
+        if line.startswith("- [ ] "):
+            new_lines.append("  <!-- h:child --> " + line)
+        elif line == "split into:":
+            new_lines.append("  <!-- h:split --> " + line)
+        elif line.startswith("retry:"):
+            new_lines.append("  <!-- h:retry --> " + line)
+        else:
+            new_lines.append("  <!-- h:info --> " + line)
+
+    last: Exception | None = None
+    for attempt in range(DAILY_NOTE_WRITE_ATTEMPTS):
+        try:
+            text = _read_daily_note_with_retry(note_path)
+            lines = text.splitlines()
+            line_idx = _locate_task_line(lines, line_idx, task_text)
+            if line_idx < 0:
+                print("[worker] annotate_failure: task line not found; skipping write")
+                return
+            # Strip any existing worker annotation block directly below the parent.
+            end = line_idx + 1
+            while end < len(lines) and lines[end].startswith("  ") and "<!-- h:" in lines[end]:
+                end += 1
+            if end > line_idx + 1:
+                del lines[line_idx + 1:end]
+            # Insert the new annotation block in the cleared slot.
+            for offset, new_line in enumerate(new_lines, start=1):
+                lines.insert(line_idx + offset, new_line)
+            _write_daily_note_with_retry(note_path, "\n".join(lines) + "\n")
+            return
+        except OSError as exc:
+            last = exc
+            if attempt == DAILY_NOTE_WRITE_ATTEMPTS - 1:
+                break
+            delay = min(DAILY_NOTE_READ_BASE_DELAY * (2 ** attempt), DAILY_NOTE_READ_MAX_DELAY)
+            delay = delay * (0.8 + random.random() * 0.4)
+            time.sleep(delay)
+    assert last is not None
+    raise last
+
+
+# ----------------------- context budget management --------------------------
+#
+# Once the iCloud self-heal layer unsticks the HT102 transcripts, a single
+# task can pull in tens of thousands of lines of prose through repeated
+# read_file calls. The MiniMax chat completions endpoint rejects payloads
+# over its context window with HTTP 400 — and a 400 does not get retried
+# (it would fail identically). Two guards keep us under the limit:
+#
+#   1. tool_read_file clamps max_lines to MAX_READ_FILE_LINES (300), so a
+#      single read can't blow the budget on its own.
+#
+#   2. Before each call_minimax, _trim_messages_for_context replaces the
+#      content of the oldest tool/assistant turns with a short sentinel
+#      until the total message history fits in CONTEXT_CHAR_BUDGET. The
+#      system prompt, the original user task, and the most recent K turns
+#      are kept verbatim — the model can always re-read a trimmed file
+#      with a fresh tool call.
+#
+# Both guards are necessary: guard 1 stops one giant read from breaking
+# the budget; guard 2 catches sustained growth across many small reads.
+# A research task that legitimately needs every byte of every transcript
+# is exactly the task that needs the budget hint bumped higher, which is
+# why CONTEXT_CHAR_BUDGET is sized for the default 180s/20i envelope and
+# tasks with [NNNs] flags can carry more.
+
+CONTEXT_CHAR_BUDGET = 100_000  # ~25k tokens, safe under MiniMax M2.7's 32k window with headroom
+_KEEP_RECENT_TURNS = 4         # keep the last 4 message turns verbatim
+_TRIM_SENTINEL = "(result trimmed to fit context — re-read the file if needed)"
+
+
+def _messages_total_chars(messages: list[dict]) -> int:
+    """Sum the string length of every `content` field in the message list.
+
+    Tool calls' `function.arguments` strings are also counted because
+    long file paths or regex patterns the model sends can be sizable.
+    Cheap O(n) scan; called once per iteration.
+    """
+    total = 0
+    for m in messages:
+        c = m.get("content")
+        if isinstance(c, str):
+            total += len(c)
+        tc = m.get("tool_calls") or []
+        for call in tc:
+            fn = call.get("function") or {}
+            args = fn.get("arguments")
+            if isinstance(args, str):
+                total += len(args)
+    return total
+
+
+def _trim_messages_for_context(messages: list[dict], budget_chars: int = CONTEXT_CHAR_BUDGET) -> int:
+    """Replace the oldest trim-eligible content with a sentinel until under budget.
+
+    Trim policy: keep
+      - index 0 (system prompt)
+      - index 1 (original user task)
+      - the last _KEEP_RECENT_TURNS messages verbatim
+    Walk the middle (indices 2 .. len - _KEEP_RECENT_TURNS - 1) from
+    oldest to newest; for each message with a string `content`, replace
+    it with _TRIM_SENTINEL. Tool calls' `function.arguments` strings are
+    also replaced with "{}" to drop their contribution.
+
+    Returns the number of messages trimmed. Idempotent: messages already
+    trimmed (content == _TRIM_SENTINEL) are skipped, so calling twice is
+    safe and a re-trim after a fresh tool result doesn't undo itself.
+
+    The trim never deletes messages — only swaps content. The model
+    still sees the full turn order (and the tool_call_ids needed to
+    match tool results), so the API contract is preserved.
+    """
+    n = len(messages)
+    if n <= _KEEP_RECENT_TURNS + 2:
+        # Too few messages to bother trimming.
+        return 0
+    # Protected range: 0 (system), 1 (user task), and the last K turns.
+    protect_end = n - _KEEP_RECENT_TURNS
+    if protect_end <= 2:
+        return 0
+    trimmed = 0
+    for idx in range(2, protect_end):
+        m = messages[idx]
+        c = m.get("content")
+        if isinstance(c, str) and c != _TRIM_SENTINEL:
+            m["content"] = _TRIM_SENTINEL
+            trimmed += 1
+        tc = m.get("tool_calls") or []
+        for call in tc:
+            fn = call.get("function") or {}
+            args = fn.get("arguments")
+            if isinstance(args, str) and args != "{}":
+                fn["arguments"] = "{}"
+    return trimmed
 
 
 # ----------------------- LLM tool-use loop ---------------------------------
@@ -881,7 +1485,22 @@ SYSTEM_PROMPT = (
     "brackets, e.g. `[1800s]` to extend the per-task wall-clock budget for "
     "this single tick. If you see one, treat the task as high-effort and "
     "plan for up to that many seconds of total work; do not pad with idle "
-    "loops to burn the budget."
+    "loops to burn the budget.\n"
+    "11. iCloud sync occasionally holds a file's lock when its local copy "
+    "has been evicted (you will see this as errno 11 / errno 35). The "
+    "worker auto-triggers a `brctl download` on the first such error and "
+    "returns a soft \"(file locked by iCloud sync — download queued, "
+    "retry this file later in the run)\" message if the lock persists. "
+    "If you see that message, move on to other files in the run and "
+    "circle back to the locked one in a later iteration — it will be "
+    "local by then.\n"
+    "12. The worker enforces a context budget on the message history. "
+    "When the conversation grows past the budget, the oldest tool "
+    "results are replaced with the literal string \"(result trimmed to "
+    "fit context — re-read the file if needed)\". If you need the full "
+    "content of a trimmed file, issue a fresh read_file (or list_directory "
+    "+ search_files) to fetch it again. Do NOT assume the trimmed "
+    "sentinel is the actual file content."
 )
 
 
@@ -890,7 +1509,23 @@ def call_minimax(
     api_key: str,
     tools: list[dict] | None = TOOLS,
     tool_choice: str | None = "auto",
+    hard_timeout: int = 90,
+    read_timeout: int = 60,
+    retries: int = 2,
 ) -> dict:
+    """Call the MiniMax chat completions endpoint with a hard wall-clock cap.
+
+    `urllib.request.urlopen(req, timeout=60)` only honors the timeout on
+    the *read* phase, not the *connect/handshake* phase. Observed: on
+    sustained iCloud or wifi contention, the SSL handshake can hang for
+    minutes, blocking the whole tool-use loop. We bound the call with a
+    `Thread` + `join(timeout=hard_timeout)`; if the thread is still alive
+    at the deadline we raise a TimeoutError. The thread itself keeps
+    running until the OS-level socket times out, but the worker tick is
+    unblocked and the in-flight call gets garbage-collected eventually.
+    """
+    import threading
+
     body_obj: dict = {
         "model": "MiniMax-M2.7",
         "messages": messages,
@@ -911,12 +1546,55 @@ def call_minimax(
             "Authorization": auth_value,
         },
     )
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError("MiniMax HTTP %s: %s" % (exc.code, detail[:400])) from exc
+
+    def _attempt() -> dict:
+        result: dict | None = None
+        error: BaseException | None = None
+
+        def _runner() -> None:
+            nonlocal result, error
+            try:
+                with urllib.request.urlopen(req, timeout=read_timeout) as resp:
+                    result = json.loads(resp.read().decode("utf-8"))
+            except BaseException as exc:  # noqa: BLE001 - we want to capture everything
+                error = exc
+
+        t = threading.Thread(target=_runner, daemon=True, name="minimax-call")
+        t.start()
+        t.join(timeout=hard_timeout)
+        if t.is_alive():
+            # The thread is still running. We can't safely kill it, but we can
+            # stop waiting. The next iteration of the worker loop will start a
+            # fresh thread; the daemon=True flag means Python won't block on
+            # the orphaned thread at interpreter shutdown.
+            raise TimeoutError("MiniMax call exceeded %ds hard timeout" % hard_timeout)
+        if error is not None:
+            if isinstance(error, urllib.error.HTTPError):
+                detail = error.read().decode("utf-8", errors="replace")
+                raise RuntimeError("MiniMax HTTP %s: %s" % (error.code, detail[:400])) from error
+            raise RuntimeError("MiniMax call failed: %s" % error) from error
+        assert result is not None
+        return result
+
+    # Timeouts (hard-timeout and socket read timeouts) are transient on
+    # MiniMax under load; retry them with a short backoff instead of failing
+    # the whole task. Non-timeout errors (HTTP 4xx/5xx, SSL, parse) are
+    # raised immediately — retrying those wastes budget.
+    last_exc: Exception | None = None
+    for attempt in range(retries + 1):
+        try:
+            return _attempt()
+        except (TimeoutError, RuntimeError) as exc:
+            is_timeout = isinstance(exc, TimeoutError) or "timed out" in str(exc).lower()
+            if not is_timeout or attempt == retries:
+                raise
+            last_exc = exc
+            delay = 2 * (attempt + 1)
+            print("[worker] MiniMax timeout (attempt %d/%d), retrying in %ds: %s"
+                  % (attempt + 1, retries + 1, delay, exc))
+            time.sleep(delay)
+    assert last_exc is not None
+    raise last_exc
 
 
 def build_task_breakdown(
@@ -1010,6 +1688,12 @@ def run_task(
         eff_iters = max(MAX_LOOP_ITERATIONS, min(200, max_seconds // 4))
     max_seconds = eff_seconds
     max_iterations = eff_iters
+    # Scale LLM timeouts to the task budget. Big-budget tasks ([1200s]+)
+    # carry large transcript contexts and get slow MiniMax responses; the
+    # fixed 60s read timeout was the top cause of spurious "read operation
+    # timed out" failures on those tasks.
+    llm_read_timeout = max(60, min(180, max_seconds // 4))
+    llm_hard_timeout = llm_read_timeout + 30
 
     explicit_md_paths = extract_absolute_md_paths(task_text)
     target_note_path = infer_target_note_path(task_text)
@@ -1022,6 +1706,22 @@ def run_task(
         explicit_md_paths=explicit_md_paths,
         target_note_path=target_note_path,
     )
+
+    # Preflight: iCloud-evicted source files are the #1 reason the LLM
+    # loop wedges for hours on a 1200s budget (every read_file returns
+    # EDEADLK and the LLM can't make progress). Fire `brctl download` in
+    # parallel for every file the task touches BEFORE we start the loop,
+    # then verify. If files are still locked after the warm-up window,
+    # fail fast with a clear "iCloud" reason that classify_failure maps
+    # to the self-healing `icloud_lock` category — the next tick will
+    # find the files local and the task will run normally.
+    if explicit_md_paths or target_note_path:
+        still_locked = _preflight_icloud_downloads(
+            task_text, today, timeout=min(30, max(5, max_seconds // 8))
+        )
+        if still_locked:
+            shown = ", ".join(Path(p).name for p in still_locked[:5])
+            return False, "iCloud source files still locked after preflight: %s" % shown, ""
 
     user_msg = (
         "Today's date: %s\n"
@@ -1058,12 +1758,35 @@ def run_task(
 
     start = time.time()
     written_paths: list[str] = []
+    # Scale the context budget with the task's wall-clock envelope. A
+    # default 180s/20i task stays at CONTEXT_CHAR_BUDGET; a [1200s]
+    # research task gets ~6.6x the headroom (capped at 500k chars) so
+    # the trim guard doesn't fight a task the user explicitly asked to
+    # run long.
+    context_budget = min(
+        CONTEXT_CHAR_BUDGET * max(1, max_seconds // MAX_WALL_SECONDS),
+        500_000,
+    )
     for iteration in range(max_iterations):
         if time.time() - start > max_seconds:
             return False, "timed out after %ds" % max_seconds, ""
 
+        # Context budget guard: trim oldest tool/assistant turns until
+        # the message history fits in context_budget. The system prompt,
+        # original user task, and most recent K turns are protected; the
+        # model can always re-read a trimmed file. Idempotent.
+        if _messages_total_chars(messages) > context_budget:
+            trimmed = _trim_messages_for_context(messages, budget_chars=context_budget)
+            if trimmed > 0:
+                print("[worker] trimmed %d old message(s) to fit context budget (%d chars)"
+                      % (trimmed, context_budget))
+
         try:
-            data = call_minimax(messages, api_key)
+            data = call_minimax(
+                messages, api_key,
+                hard_timeout=llm_hard_timeout,
+                read_timeout=llm_read_timeout,
+            )
         except Exception as exc:
             return False, "LLM call failed: %s" % exc, ""
 
@@ -1134,6 +1857,185 @@ def _guess_latest_output(today: str) -> str:
     return str(candidates[0][1].relative_to(VAULT_ROOT))
 
 
+# ----------------------- failure annotation ---------------------------------
+#
+# Per the user's stated preference, failed tasks are restored to `- [ ]` so
+# they remain retryable. The annotation block is the durable signal of what
+# went wrong and what to do next. Two functions do the work:
+#
+#   classify_failure(raw_summary) -> (category, reason, suggestion_template)
+#       Cheap, no LLM call. Maps a `run_task` summary string to one of the
+#       well-known failure categories and returns a short reason plus a
+#       suggestion template the user can act on without reading source.
+#
+#   suggest_split_subtasks(task_text, api_key) -> list[str]
+#       Optional. When the failure category is "task too long" (iter-cap or
+#       wall-clock timeout), ask MiniMax to propose 2-4 smaller child tasks
+#       that together would accomplish the parent. Returned as plain strings,
+#       which the caller renders as `- [ ]` sub-bullets under the `try:` line.
+#       Falls back to a generic split if the LLM call fails.
+
+_FAILURE_TEMPLATES = {
+    "iter_cap": (
+        "iterations exceeded: model did not converge in {iter_limit} tool-use steps",
+        "task too complex for one tick; try: split into smaller parts, raise [NNNi] budget, or pick a narrower scope",
+    ),
+    "wall_clock": (
+        "timed out: {seconds}s wall clock",
+        "task too long for one tick; try: split into parts, raise [NNNs] budget, or run research manually in Hermes Lab",
+    ),
+    "llm_network": (
+        "LLM call failed: network/SSL error to api.minimaxi.chat",
+        "transient network issue; try: wait 60s and re-run, or check api.minimaxi.chat status",
+    ),
+    "llm_http": (
+        "LLM call failed: HTTP {http_code} from api.minimaxi.chat",
+        "API rejected the request; try: rephrase the task, or check the daily note for malformed unicode",
+    ),
+    "llm_parse": (
+        "LLM returned an unparseable response",
+        "MiniMax model glitch; try: re-run the tick (the LLM may give a valid answer on retry)",
+    ),
+    "tool_error": (
+        "tool error: {tool_name}",
+        "an internal tool call failed; try: re-run, or simplify the task to avoid the failing tool",
+    ),
+    "no_writes": (
+        "completed but wrote nothing to disk",
+        "model finished without producing a deliverable; try: rephrase the task so the output file path is explicit",
+    ),
+    "icloud_lock": (
+        "source files evicted from iCloud, download triggered",
+        "re-run next tick (files should be local now), or open the folder in Finder to force the download",
+    ),
+}
+
+
+def classify_failure(summary: str, iter_limit: int = 0, seconds: int = 0, http_code: int = 0) -> tuple[str, str, str]:
+    """Map a `run_task` summary to a (category, reason, suggestion) tuple.
+
+    The summary strings are produced by `run_task` (see the early-return
+    paths above). Order of matching matters: more specific patterns first.
+    """
+    s = summary or ""
+    # iCloud lock is a self-healing failure: the LLM never saw the
+    # files, the brctl kicks are in flight, and a re-tick will land on
+    # already-local bytes. Match it early so the sticky-failure counter
+    # in process_one is skipped for this category.
+    if "iCloud" in s and "locked" in s:
+        reason_t, suggestion_t = _FAILURE_TEMPLATES["icloud_lock"]
+        return "icloud_lock", reason_t, suggestion_t
+    m = re.search(r"timed out after (\d+)s", s)
+    if m:
+        reason_t, suggestion_t = _FAILURE_TEMPLATES["wall_clock"]
+        return "wall_clock", reason_t.format(seconds=m.group(1)), suggestion_t
+    m = re.search(r"exceeded (\d+) iterations", s)
+    if m:
+        reason_t, suggestion_t = _FAILURE_TEMPLATES["iter_cap"]
+        return "iter_cap", reason_t.format(iter_limit=m.group(1)), suggestion_t
+    m = re.search(r"LLM call failed:\s*MiniMax HTTP (\d+)(?::\s*(.*))?$", s, re.DOTALL)
+    if m:
+        reason_t, suggestion_t = _FAILURE_TEMPLATES["llm_http"]
+        reason = reason_t.format(http_code=m.group(1))
+        # Surface the response body so the annotation tells us whether
+        # the 400 was "context length exceeded" / "invalid request" /
+        # "model overloaded" — three very different root causes. The
+        # body is already capped to 400 chars at the call_minimax site
+        # (urllib.error.HTTPError.read().decode()[:400]); we re-normalize
+        # whitespace and cap to 200 chars here to keep the daily-note
+        # annotation line readable.
+        body = (m.group(2) or "").strip()
+        if body:
+            body = re.sub(r"\s+", " ", body)[:200]
+            reason = "%s — %s" % (reason, body)
+        return "llm_http", reason, suggestion_t
+    if "SSL" in s or "ConnectionError" in s or "RemoteDisconnected" in s \
+            or "Connection reset" in s or "Connection refused" in s \
+            or "Connection aborted" in s or "URLError" in s \
+            or "urlopen error" in s or "NewConnectionError" in s \
+            or "SSLError" in s or "BadStatusLine" in s:
+        reason_t, suggestion_t = _FAILURE_TEMPLATES["llm_network"]
+        return "llm_network", reason_t, suggestion_t
+    if s.startswith("LLM call failed"):
+        # Specific case first: a hard-timeout raised by call_minimax is a
+        # network/transport issue, not a model-parsing issue. Classify as
+        # llm_network so the suggestion points to retry/wait rather than
+        # blaming the model.
+        if "TimeoutError" in s or "hard timeout" in s or "exceeded" in s and "timeout" in s:
+            reason_t, suggestion_t = _FAILURE_TEMPLATES["llm_network"]
+            return "llm_network", reason_t, suggestion_t
+        # Generic unrecognized LLM error: surface it as llm_parse so the
+        # user sees the raw cause without us swallowing it.
+        reason_t, suggestion_t = _FAILURE_TEMPLATES["llm_parse"]
+        return "llm_parse", "%s: %s" % (reason_t, s.split(":", 1)[-1].strip()[:200]), suggestion_t
+    if s.startswith("tool error"):
+        tool_name = s.split(":", 1)[-1].strip().split()[0] if ":" in s else "unknown"
+        reason_t, suggestion_t = _FAILURE_TEMPLATES["tool_error"]
+        return "tool_error", reason_t.format(tool_name=tool_name), suggestion_t
+    if "no deliverable" in s or "no output file written" in s:
+        reason_t, suggestion_t = _FAILURE_TEMPLATES["no_writes"]
+        return "no_writes", reason_t, suggestion_t
+    # Default fallback
+    return "other", s[:200], "try: re-run the tick, or simplify the task"
+
+
+def suggest_split_subtasks(task_text: str, api_key: str) -> list[str]:
+    """Ask MiniMax for 2-4 smaller child tasks that would accomplish the parent.
+
+    Only called for "task too long" failures. The returned list is rendered
+    as `- [ ]` sub-bullets under the `try:` line so the user can copy them
+    into the queue. Returns an empty list if MiniMax is unavailable or
+    refuses to produce a useful answer.
+    """
+    if not api_key:
+        return []
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You help split an over-large research task into 2-4 smaller "
+                "child tasks that, when run sequentially, would accomplish "
+                "the parent. Return ONLY a numbered list, one task per line, "
+                "no preamble, no commentary. Each child must be a single "
+                "self-contained sentence starting with a verb (research, "
+                "find, compare, write, list, summarize). Target length 10-25 "
+                "words per child. Do not use tools."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                "Parent task that previously exceeded the worker's budget:\n\n"
+                "%s\n\n"
+                "Produce 2-4 child tasks."
+            ) % task_text[:1500],
+        },
+    ]
+    try:
+        data = call_minimax(messages, api_key, tools=None, tool_choice=None)
+        choice = (data.get("choices") or [{}])[0]
+        msg = choice.get("message") or {}
+        content = (msg.get("content") or "").strip()
+        content = re.sub(r"<think>.*?</think>\s*", "", content, flags=re.DOTALL).strip()
+    except Exception:
+        return []
+    if not content:
+        return []
+    out: list[str] = []
+    for raw in content.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        # Strip leading numbering like "1." or "1)" or "- "
+        line = re.sub(r"^(\d+)[\.\)]\s+", "", line)
+        line = re.sub(r"^[-*]\s+", "", line)
+        if line and len(line) < 240:
+            out.append(line)
+        if len(out) >= 4:
+            break
+    return out[:4]
+
+
 # ----------------------- kanban push helper ---------------------------------
 
 def push_to_kanban(env: dict) -> str:
@@ -1162,6 +2064,25 @@ def subprocess_run(argv: list[str]) -> "subprocess.CompletedProcess":
 
 
 # ----------------------- main loop -----------------------------------------
+
+def acquire_singleton_lock():
+    """Take an exclusive flock on LOCK_PATH; return the open handle or None.
+
+    launchd's KeepAlive can start a fresh worker while a long-budget task is
+    still running in the previous process. Two concurrent ticks rewriting the
+    daily note is how duplicate/stale task lines are born. The handle must be
+    kept alive for the process lifetime — the lock dies with the fd.
+    """
+    try:
+        LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+        fh = open(LOCK_PATH, "w")
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fh.write(str(os.getpid()))
+        fh.flush()
+        return fh
+    except OSError:
+        return None
+
 
 def process_one(today: str, env: dict, push_kanban: bool) -> str:
     api_key = env.get("MINIMAX_API_KEY", "")
@@ -1196,7 +2117,53 @@ def process_one(today: str, env: dict, push_kanban: bool) -> str:
         max_seconds=max_seconds, max_iterations=max_iterations,
     )
     if not ok:
+        category, reason, suggestion = classify_failure(summary)
+        # Sticky-failure contract: after MAX_TASK_RETRIES failed runs the
+        # task is marked `- [!]` (never auto-retried) instead of restored
+        # to open. The retry counter lives in the annotation block below
+        # the line (`<!-- h:retry --> retry: N/M`).
+        #
+        # Exception: the `icloud_lock` category is self-healing. The
+        # brctl kicks are async; once they land, the next tick reads the
+        # file normally. Counting the failure against the sticky budget
+        # would mark the task - [!] for what is effectively a transient
+        # download blip, which is the wrong signal to the user.
+        fail_count = get_retry_count(note_path, line_idx, task_text) + 1
+        if category != "icloud_lock" and fail_count >= MAX_TASK_RETRIES:
+            try:
+                mark_failed(note_path, line_idx, task_text, reason)
+            except OSError as exc:
+                print("[worker] mark_failed write error: %s" % exc)
+            return "failed: %s (marked sticky - [!] after %d runs)" % (summary, fail_count)
         mark_open(note_path, line_idx, task_text)
+        # Annotate the failure on the next line so the user sees WHY and
+        # WHAT NEXT. classify_failure is cheap (no LLM call). For the
+        # "task too long" categories, we additionally try to suggest 2-4
+        # child tasks the user can copy into the queue. If that sub-call
+        # fails or times out, the static suggestion is still written.
+        extra_lines: list[str] = [
+            "retry: %d/%d failed runs (marks - [!] at %d)"
+            % (fail_count, MAX_TASK_RETRIES, MAX_TASK_RETRIES)
+        ]
+        if category in ("wall_clock", "iter_cap"):
+            try:
+                children = suggest_split_subtasks(cleaned_text, api_key)
+            except Exception as exc:
+                children = []
+                print("[worker] split-suggest failed: %s" % exc)
+            if children:
+                extra_lines.append("split into:")
+                for child in children:
+                    extra_lines.append("- [ ] " + child)
+        try:
+            annotate_failure(
+                note_path, line_idx, task_text,
+                reason=reason,
+                suggestion=suggestion,
+                extra=extra_lines or None,
+            )
+        except OSError as exc:
+            print("[worker] annotate failed: %s" % exc)
         return "failed: " + summary
     if not output_path:
         # Fall back to a re-derive: any new file in Hermes Output starting with today
@@ -1220,6 +2187,11 @@ def main() -> int:
     parser.add_argument("--max-iter", type=int, default=None,
                         help="Override default per-task LLM iteration budget. Per-line [NNNi] hints still win.")
     args = parser.parse_args()
+
+    lock = acquire_singleton_lock()
+    if lock is None:
+        print("[worker] another hermes_worker instance holds the lock; exiting")
+        return 0
 
     env = load_env(ENV_PATH)
     today = args.date or datetime.now().strftime("%Y-%m-%d")
