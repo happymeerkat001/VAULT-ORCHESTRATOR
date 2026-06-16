@@ -28,6 +28,7 @@ class YoutubeSummaryContext:
     client: TranscriptClient | None
     recording_id: str | None
     summary: str
+    summary_failure: str = ""
 
 
 def _coalesce_string(data: dict[str, Any], *keys: str) -> str:
@@ -77,7 +78,8 @@ def _poll_for_insight_content(
     while time.time() < deadline:
         try:
             insights = _collect_insights(client.list_insights(recording_id))
-        except Exception:
+        except Exception as exc:
+            print(f"[transcript_lol_summary] poll error: {exc}", file=sys.stderr, flush=True)
             insights = []
         for insight in insights:
             content = _extract_insight_content(insight, prompt_id)
@@ -100,7 +102,8 @@ def get_or_create_summary(
     # Check for existing insight with content
     try:
         insights = _collect_insights(client.list_insights(recording_id))
-    except Exception:
+    except Exception as exc:
+        print(f"[transcript_lol_summary] list_insights failed: {exc}", file=sys.stderr, flush=True)
         insights = []
 
     for insight in insights:
@@ -111,7 +114,8 @@ def get_or_create_summary(
     # Create insight — returns QUEUED with empty content
     try:
         client.create_insight(recording_id, prompt_id, tweak_query=tweak_query)
-    except Exception:
+    except Exception as exc:
+        print(f"[transcript_lol_summary] create_insight failed: {exc}", file=sys.stderr, flush=True)
         return ""
 
     # Poll until content is generated
@@ -142,6 +146,7 @@ def prepare_youtube_summary_context(
     transcript_client = client
     recording_id: str | None = None
     summary = ""
+    summary_failure = ""
 
     try:
         source = detect_source(cleaned_url)
@@ -170,15 +175,24 @@ def prepare_youtube_summary_context(
                 prompt_id,
                 tweak_query=tweak_query,
             )
+            if not summary:
+                summary_failure = "insight returned empty after polling"
     except Exception as exc:
         print(f"[transcript_lol_summary] warning: {exc}", file=sys.stderr, flush=True)
+        summary_failure = str(exc)
         recording_id = recording_id or None
 
     if not summary:
+        print(
+            "[transcript_lol_summary] no Transcript.lol summary, falling back to YouTube native",
+            file=sys.stderr,
+            flush=True,
+        )
         summary = fetch_youtube_ai_summary(video_id)
 
     return YoutubeSummaryContext(
         client=transcript_client,
         recording_id=recording_id,
         summary=summary,
+        summary_failure=summary_failure,
     )

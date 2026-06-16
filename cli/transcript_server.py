@@ -17,6 +17,7 @@ from typing import Any
 
 from export_transcripts import (
     DEFAULT_OUTPUT_DIR,
+    append_text_with_retry,
     build_markdown,
     ensure_daily_note_link,
     extract_youtube_id,
@@ -119,6 +120,12 @@ class TranscriptService:
                     if summary_context.client is not None:
                         self.client = summary_context.client
                     ai_summary = summary_context.summary or ai_summary
+                    if summary_context.recording_id and summary_context.summary:
+                        print(
+                            f"[transcript_server] using Transcript.lol summary for recording {summary_context.recording_id}"
+                        )
+                    elif ai_summary:
+                        print("[transcript_server] using YouTube native summary (Transcript.lol unavailable)")
                     if not transcript_text and summary_context.client and summary_context.recording_id:
                         transcript_text = summary_context.client.get_transcript(summary_context.recording_id, "text")
                         transcript_source = "transcript.lol"
@@ -156,6 +163,12 @@ class TranscriptService:
         write_text_with_retry(destination, markdown_content)
         print(f"[transcript_server] wrote {destination.name}: has_description={bool(description)}, has_ai_summary={bool(ai_summary)}, md_includes_description={'## Description' in markdown_content}, md_includes_ai_summary={'## AI Summary' in markdown_content}")
         ensure_daily_note_link(target_daily_note_path, f"*{safe_title}", default_title)
+
+        summary_failure = summary_context.summary_failure if summary_context else ""
+        if summary_failure:
+            short_reason = summary_failure.split("\n")[0][:200]
+            callout = f"> [!WARNING] Transcript.lol summary failed: {short_reason}\n\n"
+            append_text_with_retry(target_daily_note_path, callout)
 
         return {
             "status": "ok",

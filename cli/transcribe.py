@@ -70,7 +70,23 @@ TERMINAL_STATUSES = {"COMPLETED", "COMPLETE", "DONE", "READY", "SUCCEEDED", "SUC
 FAILED_STATUSES = {"FAILED", "ERROR", "CANCELLED", "REJECTED"}
 
 
+def _ensure_ssl_certs() -> None:
+    """Set SSL_CERT_FILE from certifi if the default cert bundle is missing."""
+    if os.environ.get("SSL_CERT_FILE"):
+        return
+    import ssl
+    default_cafile = ssl.get_default_verify_paths().cafile
+    if default_cafile and os.path.isfile(default_cafile):
+        return
+    try:
+        import certifi
+        os.environ["SSL_CERT_FILE"] = certifi.where()
+    except ImportError:
+        pass
+
+
 def load_env(env_path: Path | None = None) -> dict[str, str]:
+    _ensure_ssl_certs()
     values: dict[str, str] = {}
     path = env_path or ENV_PATH
     if path.exists():
