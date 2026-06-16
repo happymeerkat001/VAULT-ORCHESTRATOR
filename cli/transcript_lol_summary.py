@@ -21,7 +21,7 @@ DEFAULT_SUMMARY_TWEAK = (
 )
 DEFAULT_TIMEOUT_SECONDS = 600
 INSIGHT_POLL_INTERVAL = 5
-INSIGHT_POLL_TIMEOUT = 120
+INSIGHT_POLL_TIMEOUT = 300
 
 
 @dataclass(frozen=True)
@@ -76,17 +76,25 @@ def _poll_for_insight_content(
 ) -> str:
     """Poll list_insights until content for prompt_id appears or timeout."""
     deadline = time.time() + INSIGHT_POLL_TIMEOUT
+    last_seen: list[str] = []
     while time.time() < deadline:
         try:
             insights = _collect_insights(client.list_insights(recording_id))
         except Exception as exc:
             print(f"[transcript_lol_summary] poll error: {exc}", file=sys.stderr, flush=True)
             insights = []
+        last_seen = []
         for insight in insights:
+            pid = _coalesce_string(insight.get("prompt") if isinstance(insight.get("prompt"), dict) else insight, "id", "promptId", "prompt_id")
+            has_content = bool(insight.get("content", ""))
+            last_seen.append(f"prompt={pid!r} content={'yes' if has_content else 'no'}")
             content = _extract_insight_content(insight, prompt_id)
             if content:
                 return content
+        elapsed = int(INSIGHT_POLL_TIMEOUT - (deadline - time.time()))
+        print(f"[transcript_lol_summary] polling ({elapsed}s): {len(insights)} insight(s): {last_seen}", file=sys.stderr, flush=True)
         time.sleep(INSIGHT_POLL_INTERVAL)
+    print(f"[transcript_lol_summary] timeout after {INSIGHT_POLL_TIMEOUT}s waiting for prompt_id={prompt_id!r}; last seen: {last_seen}", file=sys.stderr, flush=True)
     return ""
 
 
@@ -114,7 +122,8 @@ def get_or_create_summary(
 
     # Create insight — returns QUEUED with empty content
     try:
-        client.create_insight(recording_id, prompt_id, tweak_query=tweak_query)
+        resp = client.create_insight(recording_id, prompt_id, tweak_query=tweak_query)
+        print(f"[transcript_lol_summary] create_insight response: {json.dumps(resp)[:300]}", file=sys.stderr, flush=True)
     except Exception as exc:
         print(f"[transcript_lol_summary] create_insight failed: {exc}", file=sys.stderr, flush=True)
         return ""
