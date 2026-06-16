@@ -511,7 +511,8 @@ class TranscriptClient:
                 continue
             if not urls_match(source_url, cleaned_url):
                 continue
-            if extract_status(recording) in TERMINAL_STATUSES:
+            status = extract_status(recording)
+            if status in TERMINAL_STATUSES or status in FAILED_STATUSES or status.endswith("_FAILED"):
                 return str(recording_id)
         return None
 

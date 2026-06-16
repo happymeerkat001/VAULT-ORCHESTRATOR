@@ -195,6 +195,31 @@ python3 cli/export_transcripts.py \
   --output-dir "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/AI-Vault/z.Ingestion"
 ```
 
+Backfill transcript notes linked from daily notes in an inclusive date range. This re-runs the full `TranscriptService` pipeline for linked YouTube notes so missing or low-quality summaries can be overwritten with fresh Transcript.lol output:
+
+```sh
+python3 cli/export_transcripts.py \
+  --from 2026-06-13 --to 2026-06-15 \
+  --output-dir "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/AI-Vault/z.Ingestion"
+```
+
+Preview the backfill without writing files:
+
+```sh
+python3 cli/export_transcripts.py \
+  --from 2026-06-13 --to 2026-06-15 \
+  --output-dir "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/AI-Vault/z.Ingestion" \
+  --dry-run
+```
+
+Backfill mode:
+
+- Reads `Daily Notes/YYYY-MM-DD.md` for `[[z.Ingestion/*Title]]` links
+- Re-opens matching `z.Ingestion/*.md` files and extracts source URL, title, and description
+- Reprocesses only YouTube notes through `TranscriptService.save_from_url(..., mode="full")`
+- Overwrites the existing note in place
+- Skips missing daily notes, missing transcript notes, and non-YouTube links
+
 If you want to submit one URL to Transcript.lol manually and print the transcript:
 
 ```sh

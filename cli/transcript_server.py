@@ -9,7 +9,9 @@ Run:
 from __future__ import annotations
 
 import json
+import sys
 import time
+import urllib.parse
 from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -37,6 +39,18 @@ from transcript_lol_summary import prepare_youtube_summary_context
 HOST = "127.0.0.1"
 PORT = 8765
 FALLBACK_TIMEOUT_SECONDS = 600
+
+
+def _strip_tracking_params(url: str) -> str:
+    """Remove Transcript.lol/extension tracking params (e.g. &is=...) from YouTube URLs."""
+    parsed = urllib.parse.urlparse(url)
+    netloc = parsed.netloc.lower()
+    if "youtube" not in netloc and "youtu.be" not in netloc:
+        return url
+    params = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    params.pop("is", None)
+    clean_query = urllib.parse.urlencode(params, doseq=True)
+    return urllib.parse.urlunparse(parsed._replace(query=clean_query))
 
 
 def read_text_with_retry(path: Path, attempts: int = 10, delay_s: float = 0.5) -> str:
@@ -79,7 +93,7 @@ class TranscriptService:
         mode: str = "full",
         daily_note_path: Path | None = None,
     ) -> dict[str, str]:
-        cleaned_url = (url or "").strip()
+        cleaned_url = _strip_tracking_params((url or "").strip())
         if not cleaned_url:
             raise ValueError("Missing required field: url")
         normalized_mode = mode.strip().lower() if isinstance(mode, str) else "full"
@@ -127,8 +141,11 @@ class TranscriptService:
                     elif ai_summary:
                         print("[transcript_server] using YouTube native summary (Transcript.lol unavailable)")
                     if not transcript_text and summary_context.client and summary_context.recording_id:
-                        transcript_text = summary_context.client.get_transcript(summary_context.recording_id, "text")
-                        transcript_source = "transcript.lol"
+                        try:
+                            transcript_text = summary_context.client.get_transcript(summary_context.recording_id, "text")
+                            transcript_source = "transcript.lol"
+                        except Exception as exc:
+                            print(f"[transcript_server] get_transcript failed (recording may be MEDIA_IMPORT_FAILED): {exc}", file=sys.stderr, flush=True)
         elif source == "VIMEO":
             transcript_text = fetch_vimeo_captions(cleaned_url, "en")
             if transcript_text:
@@ -137,15 +154,27 @@ class TranscriptService:
         if not transcript_text:
             if normalized_mode == "youtube":
                 raise RuntimeError("YouTube-only mode is supported only for YouTube videos with captions")
-            try:
-                transcript_text = self._fetch_from_transcript_lol(cleaned_url, default_title, source)
-            except Exception as exc:
-                if source == "VIMEO":
-                    raise RuntimeError(
-                        f"No Vimeo captions found; Transcript.lol media import failed. {exc}"
-                    ) from exc
-                raise
-            transcript_source = "transcript.lol"
+            summary_failed_import = summary_context and "MEDIA_IMPORT_FAILED" in (summary_context.summary_failure or "")
+            if summary_failed_import:
+                if not (ai_summary and ai_summary.strip()):
+                    raise RuntimeError(f"Transcript.lol media import failed and no captions available for {cleaned_url}")
+                print(f"[transcript_server] skipping _fetch_from_transcript_lol (MEDIA_IMPORT_FAILED already known)", file=sys.stderr, flush=True)
+                transcript_text = "_Transcript unavailable (Transcript.lol media import failed)._"
+                transcript_source = "unavailable"
+            else:
+                try:
+                    transcript_text = self._fetch_from_transcript_lol(cleaned_url, default_title, source)
+                    transcript_source = "transcript.lol"
+                except Exception as exc:
+                    if source == "VIMEO":
+                        raise RuntimeError(
+                            f"No Vimeo captions found; Transcript.lol media import failed. {exc}"
+                        ) from exc
+                    if not (ai_summary and ai_summary.strip()):
+                        raise
+                    print(f"[transcript_server] no transcript available, writing summary-only note: {exc}", file=sys.stderr, flush=True)
+                    transcript_text = "_Transcript unavailable (Transcript.lol media import failed)._"
+                    transcript_source = "unavailable"
 
         metadata = {
             "title": default_title,
@@ -160,6 +189,21 @@ class TranscriptService:
             description=description,
             ai_summary=ai_summary,
         )
+        if transcript_source == "unavailable" and destination.exists():
+            try:
+                existing = read_text_with_retry(destination)
+            except OSError:
+                existing = ""
+            if existing and "_Transcript unavailable" not in existing:
+                print(f"[transcript_server] skipping overwrite of {destination.name} — existing note has real transcript", flush=True)
+                return {
+                    "status": "skipped",
+                    "path": str(destination),
+                    "source": transcript_source,
+                    "mode": normalized_mode,
+                    "reason": "existing note has real transcript, not overwriting with degraded version",
+                }
+
         write_text_with_retry(destination, markdown_content)
         print(f"[transcript_server] wrote {destination.name}: has_description={bool(description)}, has_ai_summary={bool(ai_summary)}, md_includes_description={'## Description' in markdown_content}, md_includes_ai_summary={'## AI Summary' in markdown_content}")
         ensure_daily_note_link(target_daily_note_path, f"*{safe_title}", default_title)

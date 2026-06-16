@@ -10,7 +10,7 @@ Manual run:
 from __future__ import annotations
 
 import argparse
-from datetime import date
+from datetime import date, timedelta
 import json
 import re
 import subprocess
@@ -82,6 +82,13 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_OUTPUT_DIR,
         help=f"Directory to write markdown files into (default: {DEFAULT_OUTPUT_DIR})",
     )
+    parser.add_argument("--from", dest="date_from", metavar="DATE", help="Start date YYYY-MM-DD for backfill")
+    parser.add_argument(
+        "--to",
+        dest="date_to",
+        metavar="DATE",
+        help="End date YYYY-MM-DD for backfill (inclusive)",
+    )
     return parser.parse_args()
 
 
@@ -141,42 +148,85 @@ def extract_youtube_id(url: str) -> str | None:
     return None
 
 
+def _fetch_youtube_transcript_via_api(video_id: str, watch_url: str, include_timestamps: bool) -> str | None:
+    """Try yt_dlp Python API directly (avoids sys.executable version mismatch)."""
+    try:
+        import yt_dlp  # noqa: PLC0415
+    except ImportError:
+        return None
+
+    with tempfile.TemporaryDirectory(prefix="yt-sub-") as temp_dir:
+        output_template = str(Path(temp_dir) / f"yt-sub-{video_id}.%(ext)s")
+        opts = {
+            "skip_download": True,
+            "writeautomaticsub": True,
+            "subtitleslangs": ["en"],
+            "subtitlesformat": "json3",
+            "outtmpl": output_template,
+            "quiet": True,
+            "no_warnings": True,
+        }
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                ydl.download([watch_url])
+        except Exception:
+            return None
+        subtitle_files = sorted(Path(temp_dir).glob("*.json3"))
+        if not subtitle_files:
+            return None
+        return parse_json3_transcript(subtitle_files[0], include_timestamps=include_timestamps)
+
+
+def _fetch_youtube_transcript_via_subprocess(video_id: str, watch_url: str, include_timestamps: bool) -> str | None:
+    """Fallback: find a Python interpreter that has yt_dlp installed."""
+    candidates = [
+        sys.executable,
+        "/Library/Frameworks/Python.framework/Versions/3.11/bin/python3",
+        "/usr/local/bin/python3",
+    ]
+    working_exe: str | None = None
+    for exe in candidates:
+        if not Path(exe).exists():
+            continue
+        probe = subprocess.run(
+            [exe, "-c", "import yt_dlp"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if probe.returncode == 0:
+            working_exe = exe
+            break
+    if not working_exe:
+        return None
+
+    with tempfile.TemporaryDirectory(prefix="yt-sub-") as temp_dir:
+        output_template = str(Path(temp_dir) / f"yt-sub-{video_id}.%(ext)s")
+        cmd = [
+            working_exe, "-m", "yt_dlp",
+            "--write-auto-sub", "--sub-lang", "en",
+            "--skip-download", "--sub-format", "json3",
+            "-o", output_template,
+            watch_url,
+        ]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
+        if result.returncode != 0:
+            return None
+        subtitle_files = sorted(Path(temp_dir).glob("*.json3"))
+        if not subtitle_files:
+            return None
+        return parse_json3_transcript(subtitle_files[0], include_timestamps=include_timestamps)
+
+
 def fetch_youtube_transcript(video_id: str, include_timestamps: bool = False) -> str | None:
     if not video_id:
         return None
     watch_url = f"https://www.youtube.com/watch?v={urllib.parse.quote(video_id)}"
     try:
-        with tempfile.TemporaryDirectory(prefix="yt-sub-") as temp_dir:
-            output_template = str(Path(temp_dir) / f"yt-sub-{video_id}.%(ext)s")
-            cmd = [
-                sys.executable, "-m", "yt_dlp",
-                "--write-auto-sub",
-                "--sub-lang",
-                "en",
-                "--skip-download",
-                "--sub-format",
-                "json3",
-                "--js-runtimes",
-                "node",
-                "-o",
-                output_template,
-                watch_url,
-            ]
-            result = subprocess.run(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=False,
-            )
-            if result.returncode != 0:
-                return None
-
-            subtitle_files = sorted(Path(temp_dir).glob("*.json3"))
-            if not subtitle_files:
-                return None
-
-            return parse_json3_transcript(subtitle_files[0], include_timestamps=include_timestamps)
+        result = _fetch_youtube_transcript_via_api(video_id, watch_url, include_timestamps)
+        if result is not None:
+            return result
+        return _fetch_youtube_transcript_via_subprocess(video_id, watch_url, include_timestamps)
     except (OSError, json.JSONDecodeError):
         return None
 
@@ -308,10 +358,121 @@ def ensure_daily_note_link(
     append_text_with_retry(daily_note_path, to_append)
 
 
+def parse_daily_note_links(daily_note_path: Path) -> list[str]:
+    content = read_text_with_retry(daily_note_path)
+    stems: list[str] = []
+    seen: set[str] = set()
+    pattern = re.compile(r'\[\[z\.Ingestion/(\*[^\]]+)\]\]')
+    for line in content.splitlines():
+        for stem in pattern.findall(line):
+            cleaned = stem.strip()
+            if cleaned and cleaned not in seen:
+                stems.append(cleaned)
+                seen.add(cleaned)
+    return stems
+
+
+def read_note_metadata(note_path: Path) -> tuple[str, str, str]:
+    content = read_text_with_retry(note_path)
+
+    url = ""
+    title = ""
+    description = ""
+
+    source_match = re.search(r"^\*\*Source:\*\*\s+(.+)$", content, flags=re.MULTILINE)
+    if source_match:
+        url = source_match.group(1).strip()
+
+    title_match = re.search(r"^#\s+(.+)$", content, flags=re.MULTILINE)
+    if title_match:
+        title = title_match.group(1).strip()
+
+    description_match = re.search(
+        r"^## Description\s*\n\n(.*?)(?=\n(?:---|##\s))",
+        content,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    if description_match:
+        description = description_match.group(1).strip()
+
+    return url, title, description
+
+
+def _parse_iso_date(value: str, flag: str) -> date:
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(f"Invalid {flag} date: {value}. Expected YYYY-MM-DD") from exc
+
+
+def backfill_date_range(args: argparse.Namespace, vault_root: Path, output_dir: Path) -> None:
+    from transcript_server import TranscriptService
+
+    start_str = args.date_from or args.date_to
+    end_str = args.date_to or args.date_from
+    if not start_str or not end_str:
+        raise ValueError("Backfill requires at least one of --from or --to")
+
+    start_date = _parse_iso_date(start_str, "--from")
+    end_date = _parse_iso_date(end_str, "--to")
+    if start_date > end_date:
+        raise ValueError(f"Invalid date range: {start_date} is after {end_date}")
+
+    service = TranscriptService(output_dir)
+    current_date = start_date
+    reprocessed = 0
+    failures = 0
+
+    while current_date <= end_date:
+        daily_note = vault_root / "Daily Notes" / f"{current_date.isoformat()}.md"
+        if not daily_note.exists():
+            print(f"[backfill] skip missing daily note {daily_note}")
+            current_date += timedelta(days=1)
+            continue
+
+        stems = parse_daily_note_links(daily_note)
+        if not stems:
+            print(f"[backfill] no z.Ingestion links in {daily_note.name}")
+            current_date += timedelta(days=1)
+            continue
+
+        for stem in stems:
+            note_path = output_dir / f"{stem}.md"
+            if not note_path.exists():
+                print(f"[backfill] warn missing note for stem={stem}: {note_path}")
+                continue
+
+            url, title, description = read_note_metadata(note_path)
+            if not url or not extract_youtube_id(url):
+                print(f"[backfill] skip non-YouTube note {note_path.name}")
+                continue
+
+            if args.dry_run:
+                print(f"[backfill] would reprocess {note_path.name} <- {url}")
+                continue
+
+            try:
+                service.save_from_url(url, title, description=description, mode="full")
+                reprocessed += 1
+                print(f"[backfill] reprocessed {note_path.name}")
+            except Exception as exc:
+                failures += 1
+                print(f"[backfill] failed {note_path.name}: {exc}", file=sys.stderr)
+
+        current_date += timedelta(days=1)
+
+    print(f"[backfill] summary: reprocessed={reprocessed} failures={failures}")
+
+
 def main() -> None:
     args = parse_args()
     output_dir = args.output_dir.expanduser()
     vault_root = output_dir.parent
+
+    if args.date_from or args.date_to:
+        backfill_date_range(args, vault_root, output_dir)
+        return
+
     daily_note_path = vault_root / "Daily Notes" / f"{date.today().isoformat()}.md"
 
     env = load_env()

@@ -3,13 +3,14 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import time
 from dataclasses import dataclass
 from typing import Any
 
 from export_transcripts import extract_youtube_id
-from transcribe import TranscriptClient, detect_media_type, detect_source, load_env, wait_for_recording_terminal
+from transcribe import FAILED_STATUSES, TranscriptClient, detect_media_type, detect_source, extract_status, load_env, wait_for_recording_terminal
 from youtube_summary import fetch_youtube_ai_summary
 
 SUMMARY_PROMPT_ID_ENV = "TRANSCRIPT_LOL_SUMMARY_PROMPT_ID"
@@ -157,6 +158,10 @@ def prepare_youtube_summary_context(
         recording_id = transcript_client.find_recording_by_url(cleaned_url)
         if recording_id:
             print(f"[transcribe] reusing existing recording {recording_id}")
+            rec = transcript_client.get_recording(recording_id)
+            rec_status = extract_status(rec)
+            if rec_status in FAILED_STATUSES or rec_status.endswith("_FAILED"):
+                raise RuntimeError(f"{rec_status}: recording {recording_id} failed ({json.dumps(rec)[:300]})")
         else:
             recording_id = transcript_client.create_recording(
                 url=cleaned_url,
