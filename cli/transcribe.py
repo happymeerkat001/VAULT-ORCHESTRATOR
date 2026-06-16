@@ -600,7 +600,10 @@ def wait_for_recording_terminal(
             last_status = status
 
         if status in FAILED_STATUSES or status.endswith("_FAILED"):
-            raise RuntimeError(f"Transcript.lol marked recording as failed (status={status}): {json.dumps(recording)[:200]}")
+            failure_reason = recording.get("failureReason", "")
+            if failure_reason == "INSUFFICIENT_BALANCE":
+                raise RuntimeError(f"Transcript.lol: insufficient balance")
+            raise RuntimeError(f"Transcript.lol marked recording as failed (status={status}, reason={failure_reason}): {json.dumps(recording)[:200]}")
 
         if status in TERMINAL_STATUSES:
             return recording

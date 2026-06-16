@@ -7,6 +7,7 @@ import json
 import sys
 import time
 from dataclasses import dataclass
+from datetime import date, timedelta
 from typing import Any
 
 from export_transcripts import extract_youtube_id
@@ -30,6 +31,33 @@ class YoutubeSummaryContext:
     recording_id: str | None
     summary: str
     summary_failure: str = ""
+
+
+def _next_reset_date(client: TranscriptClient) -> str:
+    """Return the next monthly credit-reset date based on account creation day."""
+    try:
+        me = client._json_request(f"{__import__('transcribe').API_BASE_URL}/me")
+        created_at = me.get("createdAt", "")
+        billing_day = int(created_at[8:10]) if len(created_at) >= 10 else 1
+    except Exception:
+        billing_day = 1
+    today = date.today()
+    # Next occurrence of billing_day
+    try:
+        reset = today.replace(day=billing_day)
+    except ValueError:
+        reset = (today.replace(day=1) + timedelta(days=32)).replace(day=1)
+    if reset <= today:
+        # Roll to next month
+        year, month = today.year, today.month + 1
+        if month > 12:
+            month, year = 1, year + 1
+        try:
+            reset = date(year, month, billing_day)
+        except ValueError:
+            reset = date(year, month, 1) + timedelta(days=32)
+            reset = reset.replace(day=1)
+    return reset.strftime("%-d %b")
 
 
 def _coalesce_string(data: dict[str, Any], *keys: str) -> str:
@@ -125,6 +153,10 @@ def get_or_create_summary(
         resp = client.create_insight(recording_id, prompt_id, tweak_query=tweak_query)
         print(f"[transcript_lol_summary] create_insight response: {json.dumps(resp)[:300]}", file=sys.stderr, flush=True)
     except Exception as exc:
+        msg = str(exc)
+        if "402" in msg or "Insufficient balance" in msg:
+            reset = _next_reset_date(client)
+            raise RuntimeError(f"Transcript.lol: insufficient balance — credits reset {reset}") from exc
         print(f"[transcript_lol_summary] create_insight failed: {exc}", file=sys.stderr, flush=True)
         return ""
 
@@ -170,6 +202,10 @@ def prepare_youtube_summary_context(
             rec = transcript_client.get_recording(recording_id)
             rec_status = extract_status(rec)
             if rec_status in FAILED_STATUSES or rec_status.endswith("_FAILED"):
+                failure_reason = rec.get("failureReason", "")
+                if failure_reason == "INSUFFICIENT_BALANCE":
+                    reset = _next_reset_date(transcript_client)
+                    raise RuntimeError(f"Transcript.lol: insufficient balance — credits reset {reset}")
                 print(f"[transcript_lol_summary] existing recording {recording_id} has status {rec_status}, creating fresh one", file=sys.stderr, flush=True)
                 recording_id = None
 
