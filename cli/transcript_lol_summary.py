@@ -170,8 +170,10 @@ def prepare_youtube_summary_context(
             rec = transcript_client.get_recording(recording_id)
             rec_status = extract_status(rec)
             if rec_status in FAILED_STATUSES or rec_status.endswith("_FAILED"):
-                raise RuntimeError(f"{rec_status}: recording {recording_id} failed ({json.dumps(rec)[:300]})")
-        else:
+                print(f"[transcript_lol_summary] existing recording {recording_id} has status {rec_status}, creating fresh one", file=sys.stderr, flush=True)
+                recording_id = None
+
+        if not recording_id:
             recording_id = transcript_client.create_recording(
                 url=cleaned_url,
                 title=title,

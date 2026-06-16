@@ -600,7 +600,7 @@ def wait_for_recording_terminal(
             last_status = status
 
         if status in FAILED_STATUSES or status.endswith("_FAILED"):
-            raise RuntimeError(f"Transcript.lol marked recording as failed: {json.dumps(recording)[:500]}")
+            raise RuntimeError(f"Transcript.lol marked recording as failed (status={status}): {json.dumps(recording)[:200]}")
 
         if status in TERMINAL_STATUSES:
             return recording
