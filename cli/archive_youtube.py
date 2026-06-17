@@ -297,24 +297,27 @@ def main() -> None:
 
             metadata = fetch_youtube_metadata(video_id)
             safe_title = sanitize_title(metadata["title"])
-            prefixed_stem = f"*{safe_title}"
-            destination = output_dir / f"{prefixed_stem}.md"
             daily_note_path = vault_root / "Daily Notes" / f"{date.today().isoformat()}.md"
             processed_path = unique_processed_path(processed_dir, source_file.name)
             archive_date = metadata["upload_date"] or date.today().isoformat()
 
-            if destination.exists():
+            # Check both possible destinations before we know the transcript source
+            existing_destination = next(
+                (output_dir / f"{prefix}{safe_title}.md" for prefix in ("*", "") if (output_dir / f"{prefix}{safe_title}.md").exists()),
+                None,
+            )
+            if existing_destination:
                 skipped_existing += 1
                 if not args.dry_run:
                     shutil.move(str(source_file), str(processed_path))
                     moved += 1
                     print(
-                        f"[archive] skip existing {destination.name}, "
+                        f"[archive] skip existing {existing_destination.name}, "
                         f"moved {source_file.name} -> processed/{processed_path.name}"
                     )
                 else:
                     print(
-                        f"[archive] would skip existing {destination.name}, "
+                        f"[archive] would skip existing {existing_destination.name}, "
                         f"would move {source_file.name} -> processed/{processed_path.name}"
                 )
                 continue
@@ -332,23 +335,29 @@ def main() -> None:
 
             if args.dry_run:
                 print(
-                    f"[archive] would write {destination.name} "
+                    f"[archive] would write {safe_title}.md "
                     f"from {source_file.name} date={archive_date}"
                 )
                 print(f"[archive] would move {source_file.name} -> processed/{processed_path.name}")
                 continue
 
             transcript_text = fetch_youtube_transcript(video_id, include_timestamps=True)
+            transcript_source = "YouTube captions"
             if not transcript_text and summary_context.client and summary_context.recording_id:
                 transcript_text = summary_context.client.get_transcript(summary_context.recording_id, "text")
+                transcript_source = "transcript.lol"
             if not transcript_text:
                 raise RuntimeError("No transcript returned from YouTube captions.")
+
+            stem_prefix = "" if transcript_source == "transcript.lol" else "*"
+            prefixed_stem = f"{stem_prefix}{safe_title}"
+            destination = output_dir / f"{prefixed_stem}.md"
 
             destination.write_text(
                 build_archive_markdown(
                     metadata,
                     transcript_text,
-                    "YouTube captions",
+                    transcript_source,
                     metadata["source_url"] or source_url,
                     ai_summary=ai_summary,
                 ),

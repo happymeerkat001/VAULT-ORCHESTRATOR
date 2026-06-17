@@ -102,7 +102,6 @@ class TranscriptService:
 
         default_title = title.strip() if isinstance(title, str) and title.strip() else cleaned_url
         safe_title = sanitize_title(default_title)
-        destination = self.output_dir / f"*{safe_title}.md"
         target_daily_note_path = (
             daily_note_path.expanduser()
             if isinstance(daily_note_path, Path)
@@ -176,6 +175,10 @@ class TranscriptService:
                     transcript_text = "_Transcript unavailable (Transcript.lol media import failed)._"
                     transcript_source = "unavailable"
 
+        stem_prefix = "" if transcript_source == "transcript.lol" else "*"
+        safe_stem = f"{stem_prefix}{safe_title}"
+        destination = self.output_dir / f"{safe_stem}.md"
+
         metadata = {
             "title": default_title,
             "sourceUrl": cleaned_url,
@@ -206,7 +209,7 @@ class TranscriptService:
 
         write_text_with_retry(destination, markdown_content)
         print(f"[transcript_server] wrote {destination.name}: has_description={bool(description)}, has_ai_summary={bool(ai_summary)}, md_includes_description={'## Description' in markdown_content}, md_includes_ai_summary={'## AI Summary' in markdown_content}")
-        ensure_daily_note_link(target_daily_note_path, f"*{safe_title}", default_title)
+        ensure_daily_note_link(target_daily_note_path, safe_stem, default_title)
 
         summary_failure = summary_context.summary_failure if summary_context else ""
         if summary_failure:
@@ -217,6 +220,7 @@ class TranscriptService:
         return {
             "status": "ok",
             "path": str(destination),
+            "stem": safe_stem,
             "source": transcript_source,
             "mode": normalized_mode,
         }

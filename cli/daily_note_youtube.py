@@ -233,29 +233,35 @@ def main() -> int:
 
             metadata = fetch_youtube_metadata(video_id)
             safe_title = sanitize_title(metadata["title"])
-            prefixed_stem = f"*{safe_title}"
-            destination = output_dir / f"{prefixed_stem}.md"
-            replacement = f"[[z.Ingestion/{prefixed_stem}]]"
+            # Both possible destinations (prefix depends on transcript source)
+            destination_starred = output_dir / f"*{safe_title}.md"
+            destination_plain = output_dir / f"{safe_title}.md"
+            existing_destination = next(
+                (d for d in (destination_starred, destination_plain) if d in seen_destinations or d.exists()),
+                None,
+            )
 
             if args.dry_run:
-                action = "would normalize existing" if destination.exists() or destination in seen_destinations else "would ingest"
+                action = "would normalize existing" if existing_destination else "would ingest"
                 print(
                     f"[daily-note-youtube] {action} line={item.line_index + 1} "
                     f"title={metadata['title']!r} url={item.url}"
                 )
                 continue
 
-            if destination.exists() or destination in seen_destinations:
-                ensure_daily_note_link(note_path, prefixed_stem, metadata["title"])
+            if existing_destination:
+                existing_stem = existing_destination.stem
+                replacement = f"[[z.Ingestion/{existing_stem}]]"
+                ensure_daily_note_link(note_path, existing_stem, metadata["title"])
                 if replace_url_line(note_path, item.line_index, item.url, replacement):
                     normalized_existing += 1
-                    print(f"[daily-note-youtube] normalized existing {destination.name}")
+                    print(f"[daily-note-youtube] normalized existing {existing_destination.name}")
                 else:
                     print(
                         f"[daily-note-youtube] existing destination but URL no longer present at "
-                        f"line={item.line_index + 1}: {destination.name}"
+                        f"line={item.line_index + 1}: {existing_destination.name}"
                     )
-                seen_destinations.add(destination)
+                seen_destinations.add(existing_destination)
                 continue
 
             response = service.save_from_url(
@@ -265,18 +271,21 @@ def main() -> int:
                 mode="full",
                 daily_note_path=note_path,
             )
+            actual_stem = response.get("stem") or f"*{safe_title}"
+            actual_destination = Path(response["path"])
+            replacement = f"[[z.Ingestion/{actual_stem}]]"
             written += 1
             if replace_url_line(note_path, item.line_index, item.url, replacement):
                 print(
-                    f"[daily-note-youtube] wrote {destination.name} "
+                    f"[daily-note-youtube] wrote {actual_destination.name} "
                     f"source={response.get('source', '')}"
                 )
             else:
                 print(
-                    f"[daily-note-youtube] wrote {destination.name} but could not replace URL at "
+                    f"[daily-note-youtube] wrote {actual_destination.name} but could not replace URL at "
                     f"line={item.line_index + 1}"
                 )
-            seen_destinations.add(destination)
+            seen_destinations.add(actual_destination)
         except Exception as exc:
             skipped_invalid += 1
             reason = str(exc).strip() or exc.__class__.__name__
