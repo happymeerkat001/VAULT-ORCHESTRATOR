@@ -42,6 +42,31 @@ try:
 except ImportError:
     _HAS_ZONEINFO = False
 
+import os as _os
+if not _os.environ.get("SSL_CERT_FILE"):
+    try:
+        import certifi
+        _os.environ["SSL_CERT_FILE"] = certifi.where()
+    except ImportError:
+        pass
+
+try:
+    from daily_note_helpers import (
+        build_note_preamble as _build_note_preamble,
+        ensure_daily_note_preamble,
+        has_note_preamble as _has_note_preamble,
+        read_text_with_retry as _read_text_with_retry,
+        write_text_with_retry as _write_text_with_retry,
+    )
+except ModuleNotFoundError:
+    from ingest.daily_note_helpers import (
+        build_note_preamble as _build_note_preamble,
+        ensure_daily_note_preamble,
+        has_note_preamble as _has_note_preamble,
+        read_text_with_retry as _read_text_with_retry,
+        write_text_with_retry as _write_text_with_retry,
+    )
+
 # ── CONFIGURATION ─────────────────────────────────────────────────────────────
 CREDENTIALS_PATH = Path("~/.config/vault-orchestrator/google_credentials").expanduser()
 VAULT_PATH = Path(
@@ -183,16 +208,19 @@ def today_local() -> str:
     return datetime.now().strftime("%Y-%m-%d")
 
 
-def get_calendar_bounds() -> tuple[str, str, int]:
+def get_calendar_bounds(date_str: str | None = None) -> tuple[str, str, int]:
     """Return ISO8601 start/end for calendar window and number of days.
 
     Sunday: 7 days, Wednesday: 4 days, all other days: 2 days (today + tomorrow).
     """
     if _HAS_ZONEINFO:
         tz = ZoneInfo(LOCAL_TIMEZONE)
-        now = datetime.now(tz=tz)
+        if date_str:
+            now = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=tz)
+        else:
+            now = datetime.now(tz=tz)
     else:
-        now = datetime.now()
+        now = datetime.strptime(date_str, "%Y-%m-%d") if date_str else datetime.now()
 
     weekday = now.weekday()  # 0=Mon … 6=Sun
     if weekday == 6:      # Sunday
@@ -273,8 +301,24 @@ def _get_json(url: str, access_token: str) -> dict:
         url,
         headers={"Authorization": f"Bearer {access_token}"},
     )
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    transient_errors = (
+        urllib.error.URLError,
+        ConnectionResetError,
+        ConnectionAbortedError,
+    )
+    last_exc = None
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except transient_errors as exc:
+            last_exc = exc
+            if attempt == 2:
+                raise
+            time.sleep(min(0.5 * (2 ** attempt), 4.0))
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("unreachable: _get_json retry loop exited without return")
 
 
 def fetch_all_calendars(access_token: str) -> list[str]:
@@ -312,8 +356,8 @@ def _event_start_sort_key(event: dict) -> str:
     return start.get("dateTime") or start.get("date") or ""
 
 
-def fetch_calendar_events(access_token: str) -> tuple[dict, int]:
-    start, end, lookahead = get_calendar_bounds()
+def fetch_calendar_events(access_token: str, date_str: str | None = None) -> tuple[dict, int]:
+    start, end, lookahead = get_calendar_bounds(date_str)
     calendar_ids = fetch_all_calendars(access_token)
     events = []
 
@@ -548,14 +592,7 @@ def read_text_with_retry(
     initial_delay: float = 0.5,
     max_delay: float = 4.0,
 ) -> str:
-    last_exc: Exception | None = None
-    for i in range(max(1, attempts)):
-        try:
-            return path.read_text(encoding="utf-8")
-        except OSError as exc:
-            last_exc = exc
-            time.sleep(min(initial_delay * 2**i, max_delay))
-    raise last_exc or OSError(f"Unable to read {path}")
+    return _read_text_with_retry(path, attempts, initial_delay, max_delay)
 
 
 def write_text_with_retry(
@@ -565,15 +602,7 @@ def write_text_with_retry(
     initial_delay: float = 0.5,
     max_delay: float = 4.0,
 ) -> None:
-    last_exc: Exception | None = None
-    for i in range(max(1, attempts)):
-        try:
-            path.write_text(content, encoding="utf-8")
-            return
-        except OSError as exc:
-            last_exc = exc
-            time.sleep(min(initial_delay * 2**i, max_delay))
-    raise last_exc or OSError(f"Unable to write {path}")
+    _write_text_with_retry(path, content, attempts, initial_delay, max_delay)
 
 
 def get_yesterday_unchecked(date_str: str) -> tuple[list[str], list[str], list[str]]:
@@ -623,56 +652,88 @@ def get_yesterday_unchecked(date_str: str) -> tuple[list[str], list[str], list[s
 
 
 def build_note_preamble(date_str: str) -> str:
-    current = datetime.strptime(date_str, "%Y-%m-%d")
-    prev_date = (current - timedelta(days=1)).strftime("%Y-%m-%d")
-    next_date = (current + timedelta(days=1)).strftime("%Y-%m-%d")
-    return (
-        "---\n"
-        "tags:\n"
-        "  - 📓\n"
-        "---\n"
-        f"Days:[[Daily Notes/{prev_date} | Yesterday]] <== [[Daily Notes/{date_str}]] ==> "
-        f"[[Daily Notes/{next_date}|Tomorrow]]\n"
-    )
+    return _build_note_preamble(date_str)
 
 
 def has_note_preamble(content: str) -> bool:
-    head = "\n".join(content.splitlines()[:20])
-    return head.startswith("---\n") and "tags:" in head and "Days:[[" in head
+    return _has_note_preamble(content)
 
 
 def write_briefing(date_str: str, markdown: str) -> Path:
     out_path = DAILY_NOTES_PATH / f"{date_str}.md"
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    preamble = build_note_preamble(date_str)
+    ensure_daily_note_preamble(DAILY_NOTES_PATH, date_str)
+    existing = read_text_with_retry(out_path)
 
-    if out_path.exists():
-        existing = read_text_with_retry(out_path)
-        if not has_note_preamble(existing):
-            existing = f"{preamble}\n{existing.lstrip()}"
-            write_text_with_retry(out_path, existing)
-        # Check for the main header or any partial briefing artifacts
-        briefing_markers = (
-            BRIEFING_HEADER,
-            "#degraded-sync",
-            "## Weather",
-            "## Calendar 📅",
-            "## Email Highlights 📧",
-            "## Today's Focus 🧐",
-            HERMES_TODO_HEADER,
-        )
-        if any(marker in existing for marker in briefing_markers):
-            marker_positions = [existing.find(marker) for marker in briefing_markers if marker in existing]
-            start = min(pos for pos in marker_positions if pos >= 0)
-            updated = f"{existing[:start].rstrip()}\n\n{markdown}"
-            write_text_with_retry(out_path, updated)
-            print(f"[briefing_sync] replaced existing briefing content in {out_path.name}.")
-            return out_path
-        write_text_with_retry(out_path, existing + f"\n{markdown}")
-    else:
-        write_text_with_retry(out_path, f"{preamble}\n{markdown}")
+    # Check for the main header or any partial briefing artifacts
+    briefing_markers = (
+        BRIEFING_HEADER,
+        "#degraded-sync",
+        "## Weather",
+        "## Calendar 📅",
+        "## Email Highlights 📧",
+        "## Today's Focus 🧐",
+        HERMES_TODO_HEADER,
+    )
+    if any(marker in existing for marker in briefing_markers):
+        marker_positions = [existing.find(marker) for marker in briefing_markers if marker in existing]
+        start = min(pos for pos in marker_positions if pos >= 0)
+        updated = f"{existing[:start].rstrip()}\n\n{markdown}"
+        write_text_with_retry(out_path, updated)
+        print(f"[briefing_sync] replaced existing briefing content in {out_path.name}.")
+        return out_path
 
+    write_text_with_retry(out_path, f"{existing.rstrip()}\n\n{markdown}")
     return out_path
+
+
+def write_degraded_briefing(date_str: str, reason: str, fix_cmd: str) -> Path:
+    # Local-only rollover — no network needed. Preserves yesterday's curated
+    # To-Think/To-Do/Hermes-to-do even when Calendar/Gmail fail.
+    try:
+        think_rollover, todo_rollover, hermes_rollover = get_yesterday_unchecked(date_str)
+        think_section = (
+            "# To-Think 🧠\n" + "\n".join(think_rollover) + "\n"
+            if think_rollover
+            else "# To-Think 🧠\n*(Rollover unavailable — yesterday's note could not be read.)*\n"
+        )
+    except OSError as exc:
+        print(f"[ERROR] Could not read yesterday's note for degraded rollover: {exc}", file=sys.stderr)
+        think_rollover, todo_rollover, hermes_rollover = [], [], []
+        think_section = (
+            "# To-Think 🧠\n"
+            "*(Yesterday's note could not be read while generating the degraded briefing.)\n"
+            " Repair the briefing sync, then re-run this date.)*\n"
+        )
+
+    todo_section = (
+        "## To-Do ✅\n" + "\n".join(todo_rollover) + "\n"
+        if todo_rollover
+        else (
+            "## To-Do ✅\n"
+            "*(No rolled-over todos — original data sources failed.)\n"
+            " Re-run this date after fixing the briefing sync.)*\n"
+        )
+    )
+    hermes_section = (
+        f"{HERMES_TODO_HEADER}\n" + "\n".join(hermes_rollover) + "\n"
+        if hermes_rollover
+        else f"{HERMES_TODO_HEADER}\n"
+    )
+
+    markdown = (
+        f"{BRIEFING_HEADER}\n\n"
+        "#degraded-sync\n\n"
+        f"> [!ERROR] Briefing Sync Failed: {reason}.\n"
+        f"> Fix: `{fix_cmd}`\n\n"
+        f"{think_section}\n"
+        f"{todo_section}\n"
+        f"{hermes_section}\n"
+        "## Calendar 📅\n"
+        "*(Unavailable — Calendar fetch failed. Re-run this date after fixing the briefing sync.)*\n\n"
+        "## Email Highlights 📧\n"
+        "*(Unavailable — Gmail fetch failed. Re-run this date after fixing the briefing sync.)*\n"
+    )
+    return write_briefing(date_str, markdown)
 
 
 def main() -> None:
@@ -685,17 +746,19 @@ def main() -> None:
     print(f"[briefing_sync] output_path={DAILY_NOTES_PATH / f'{today}.md'}")
 
     # Ensure daily note exists even if OAuth or downstream API calls fail.
-    out_path = DAILY_NOTES_PATH / f"{today}.md"
-    if not out_path.exists():
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        write_text_with_retry(out_path, build_note_preamble(today))
-        print(f"[briefing_sync] created stub note: {out_path.name}")
+    out_path = ensure_daily_note_preamble(DAILY_NOTES_PATH, today)
+    print(f"[briefing_sync] daily note ready: {out_path.name}")
 
     # 1. Load credentials
     try:
         creds = load_credentials()
     except (FileNotFoundError, json.JSONDecodeError, ValueError) as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)
+        write_degraded_briefing(
+            today,
+            "Credentials unavailable or invalid",
+            "check ~/.config/vault-orchestrator/google_credentials",
+        )
         sys.exit(1)
 
     # 2. Refresh Google OAuth2 access token
@@ -703,25 +766,38 @@ def main() -> None:
         access_token = refresh_access_token(creds)
     except RuntimeError as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)
+        write_degraded_briefing(
+            today,
+            "Google OAuth token expired",
+            "cd /Users/leon/Documents/Code/Obsidian-vault-orchestrator && python3 cli/google_reauth.py",
+        )
         sys.exit(1)
     except Exception as exc:
         print(f"[ERROR] Google OAuth token refresh failed: {exc}", file=sys.stderr)
+        write_degraded_briefing(
+            today,
+            "Google OAuth token refresh failed",
+            "cd /Users/leon/Documents/Code/Obsidian-vault-orchestrator && python3 ingest/briefing_sync.py",
+        )
         sys.exit(1)
 
     # 3. Fetch data in sequence (stdlib has no async — keep it simple)
     try:
-        calendar_data, lookahead = fetch_calendar_events(access_token)
+        calendar_data, lookahead = fetch_calendar_events(access_token, today)
         print(f"[briefing_sync] calendar: {len(calendar_data.get('items') or [])} event(s) ({lookahead} day window)")
     except Exception as exc:
-        print(f"[ERROR] Calendar fetch failed: {exc}", file=sys.stderr)
-        sys.exit(1)
+        # Calendar failed after retries. Don't blow away the briefing — continue
+        # with an empty calendar so the rest of the note still gets written.
+        print(f"[WARN] Calendar fetch failed: {exc}", file=sys.stderr)
+        calendar_data, lookahead = {"items": []}, 0
 
     try:
         email_data = fetch_starred_emails(access_token)
         print(f"[briefing_sync] starred emails: {len(email_data.get('messages') or [])}")
     except Exception as exc:
         print(f"[ERROR] Gmail fetch failed: {exc}", file=sys.stderr)
-        sys.exit(1)
+        email_data = {"messages": []}
+        print("[briefing_sync] starred emails: unavailable; continuing with empty email list")
 
     # 4. Fetch weather (optional and non-critical)
     weather_markdown = ""
@@ -828,3 +904,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

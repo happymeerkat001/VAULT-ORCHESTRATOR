@@ -27,6 +27,7 @@ scripts/    Vault cleanup and post-processing helpers.
 | `ingest/hedy_sync.py` | Hedy AI sessions API | Writes recaps + action items to `Hedy-AI/YYYY-MM-DD.md` |
 | `ingest/mymemo_sync.py` | MyMemo AI API | Appends podcast digests to `Daily Notes/YYYY-MM-DD.md` |
 | `ingest/vision_sync.py` | Claude Vision API | OCR images from vault, uploads to Imgur |
+| `ingest/weekly_housekeep_propose.py` | Local markdown scan | PR-style proposals in `Hermes Output/` + Daily Note addendum (never mutates notes by itself) |
 | `cli/export_transcripts.py` | Transcript.lol recordings | Writes notes into `z.Ingestion/` and appends links into today's daily note |
 | `cli/transcribe.py` | Single media URL | Prints transcript text to stdout |
 | `cli/transcript.py` | One or more media URLs | Saves transcript markdown into `z.Ingestion/` |
@@ -95,7 +96,7 @@ Four LaunchAgents run automatically on macOS:
 
 | Plist | Trigger | Runs |
 |-------|---------|------|
-| `com.leon.briefing.daily` | Daily 5:47 AM | `run-briefing.sh` → `/briefing` Claude skill |
+| `com.leon.briefing.daily` | 5:47 AM + every 30 min + at load | `run-briefing.sh` → `python3 cli/daily_briefing_catchup.py` (no-op before 05:45 or once briefing exists; reauth via `cli/google_reauth.py` if needed) |
 | `com.ang.yt-archive` | Vault file change + every 60s | `run_archive.sh` → `archive_youtube.py` + `daily_note_youtube.py` + `scrape_notes.py` |
 | `com.leon.process-ingest` | Vault file change + every 30s | `scripts/process_ingest.py --apply` |
 | `com.leon.transcript-server` | Always-on (KeepAlive) | `cli/transcript_server.py` on port 8765 |
@@ -121,7 +122,18 @@ Manual verification:
 ```sh
 python3 ingest/briefing_sync.py              # today
 python3 ingest/briefing_sync.py --date 2026-06-04  # backfill a specific date
+python3 cli/daily_briefing_catchup.py        # only runs if today's note lacks Morning Briefing
+python3 cli/daily_briefing_catchup.py --date 2026-06-04 --force
 ```
+
+Use `cli/daily_briefing_catchup.py` when a Daily Note exists but rollover or
+`## Morning Briefing ☀️` is missing. The catch-up command normalizes the note's
+frontmatter/`Days:` preamble, preserves content already added by other workflows
+such as Vault Housekeep, and then delegates briefing generation to
+`ingest/briefing_sync.py`. If it writes `#degraded-sync`, credentials or a
+downstream API failed after launch; rerun the catch-up command after fixing that
+dependency. If the note still lacks `## Morning Briefing ☀️` and no catch-up log
+exists, debug launchd scheduling first rather than assuming Google OAuth failed.
 
 If run fails with:
 
@@ -182,8 +194,11 @@ That command:
 - Skips recordings already exported
 - Appends a `[[z.Ingestion/<title>]]` link into `Daily Notes/YYYY-MM-DD.md`
 
-Preview without writing files:
+New YouTube ingestion notes are named `YYYYMMDD Title.md`. When the note uses
+YouTube captions or a degraded transcript path, the fallback marker follows the
+date: `YYYYMMDD *Title.md`. Existing notes are not renamed automatically.
 
+Preview without writing files:
 ```sh
 python3 cli/export_transcripts.py --dry-run
 ```
@@ -325,6 +340,74 @@ python3 scripts/process_ingest.py
 The `com.leon.process-ingest` LaunchAgent runs this automatically every 30s.
 
 ## Cross-vault transfer
+
+## Weekly vault housekeeping
+
+`ingest/weekly_housekeep_propose.py` is a PR-style, never-destructive vault cleaner. It scans the vault for empty notes, near-duplicates by first heading, and `Archive/` files older than 180 days, then writes a proposal report and a Daily Note addendum. The proposer never moves, renames, or deletes notes by itself.
+
+Preview a week's proposals without writing anything:
+
+```sh
+python3 ingest/weekly_housekeep_propose.py --date 2026-07-04 --propose-only \
+  --vault /Users/leon/Library/Mobile\ Documents/iCloud~md~obsidian/Documents/AI-Vault
+```
+
+Write the proposal file plus the Saturday Daily Note addendum (idempotent — see below):
+
+```sh
+python3 ingest/weekly_housekeep_propose.py --date 2026-07-04
+```
+
+Apply approved proposals — refuses to run without an explicit human approval file:
+
+```sh
+# 1. Approve by writing a JSON file the script will read.
+mkdir -p "$HOME/Hermes Output"
+echo '{"proposal_id":"wk2026-27","ok":true}' > "$HOME/Hermes Output/housekeep.approve.json"
+# 2. Run the wrapper (it refuses if the approval file or proposal is missing).
+/Users/leon/.claude/scripts/apply-housekeep-proposals.sh
+# 3. On success the approval file is cleared and the proposal is archived to
+#    $HOME/.../AI-Vault/Hermes Output/applied/.
+```
+
+Try the negative path (no approval file) to confirm the wrapper refuses:
+
+```sh
+rm -f "$HOME/Hermes Output/housekeep.approve.json"
+/Users/leon/.claude/scripts/apply-housekeep-proposals.sh
+# -> [apply-housekeep] refusing: no approval file at ... housekeep.approve.json
+# -> exit 1
+```
+
+Confidence scoring (used to pick which actions are autonomous vs. human review):
+
+| Action kind | Confidence | Behaviour |
+|---|---|---|
+| `EMPTY_NOTE` | 0.97 | Routed to `MERGE` (non-archive) or `DEFER` (in `Archive/`). |
+| `STALE_ARCHIVE` (≥365 days) | 0.97 | `DEFER`. |
+| `STALE_ARCHIVE` (180–364 days) | 0.93 | `DEFER`. |
+| `ORPHAN_TOPIC` (0 backlinks) | 0.90 | Routed to human review. |
+| `NEAR_DUPLICATE` | 0.30–0.84 | Routed to human review (never autonomous). |
+
+Schedule it with Hermes cron (created disabled-by-default so the first proposal can be reviewed by hand):
+
+```sh
+hermes cron list --profile lean
+# to enable after review:
+# hermes cron edit weekly-vault-housekeep   # set enabled=true and save
+hermes cron run weekly-vault-housekeep      # one-off manual kickoff
+```
+
+Run the focused unit tests:
+
+```sh
+python3 -m pytest tests/test_weekly_housekeep_propose.py -q
+```
+
+Notes:
+- The Daily Note addendum uses `<!-- housekeep-id:wkYYYY-Www -->` and `<!-- housekeep-until:YYYY-MM-DD -->` HTML comments so the same week rolls forward in the next 7 Morning Briefings.
+- The proposer avoids `Daily Notes/` and `.dot*` paths, so it never audits notes owned by `briefing_sync.py` or the launchd workers.
+
 
 Copy notes matching keywords to a second vault:
 
