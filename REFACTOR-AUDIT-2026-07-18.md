@@ -1,5 +1,8 @@
 # Obsidian-vault-orchestrator — Refactor & Optimization Audit (2026-07-18)
 
+> **STATUS: PLAN ONLY — NOTHING EXECUTED YET.**
+> **Next step:** FIRST land the uncommitted July-16 work on `fix/daily-note-rollover-catchup` (5 modified cli/ files + untracked test) — nothing else until that's committed. Then open a Codex session here and say: *"Execute REFACTOR-AUDIT-2026-07-18.md following the Suggested Codex order."* The worker LaunchAgent keeps running throughout; entry-point paths must not move.
+
 Fable audit; Codex implements. **This repo powers at least 7 live LaunchAgents** (hermes-worker, briefing.daily, hedy-sync, process-ingest, transcript-server, preflight, kanban) — every refactor must keep entry-point paths (`python3 cli/X.py`) working, since plists call them directly. Note: `vault-orchestrator` is a symlink to this repo — not a duplicate; nothing to merge.
 
 ## Verdict in one line
