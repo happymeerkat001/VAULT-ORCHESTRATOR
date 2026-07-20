@@ -25,6 +25,7 @@ from export_transcripts import (
     extract_youtube_id,
     fetch_youtube_transcript,
     sanitize_title,
+    youtube_ingest_stem,
 )
 from transcript_lol_summary import prepare_youtube_summary_context
 from transcribe import load_env
@@ -302,8 +303,12 @@ def main() -> None:
             archive_date = metadata["upload_date"] or date.today().isoformat()
 
             # Check both possible destinations before we know the transcript source
+            candidate_stems = (
+                youtube_ingest_stem(safe_title, transcript_source="YouTube captions"),
+                youtube_ingest_stem(safe_title, transcript_source="transcript.lol"),
+            )
             existing_destination = next(
-                (output_dir / f"{prefix}{safe_title}.md" for prefix in ("*", "") if (output_dir / f"{prefix}{safe_title}.md").exists()),
+                (output_dir / f"{stem}.md" for stem in candidate_stems if (output_dir / f"{stem}.md").exists()),
                 None,
             )
             if existing_destination:
@@ -335,7 +340,7 @@ def main() -> None:
 
             if args.dry_run:
                 print(
-                    f"[archive] would write {safe_title}.md "
+                    f"[archive] would write {candidate_stems[0]}.md "
                     f"from {source_file.name} date={archive_date}"
                 )
                 print(f"[archive] would move {source_file.name} -> processed/{processed_path.name}")
@@ -349,8 +354,10 @@ def main() -> None:
             if not transcript_text:
                 raise RuntimeError("No transcript returned from YouTube captions.")
 
-            stem_prefix = "" if transcript_source == "transcript.lol" else "*"
-            prefixed_stem = f"{stem_prefix}{safe_title}"
+            prefixed_stem = youtube_ingest_stem(
+                safe_title,
+                transcript_source=transcript_source,
+            )
             destination = output_dir / f"{prefixed_stem}.md"
 
             destination.write_text(

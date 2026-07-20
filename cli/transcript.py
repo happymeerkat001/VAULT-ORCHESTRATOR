@@ -24,7 +24,7 @@ from transcript_server import TranscriptService
 @dataclass(frozen=True)
 class TranscriptResult:
     url: str
-    safe_title: str
+    stem: str
     transcript_path: str
     transcript_source: str
 
@@ -72,14 +72,14 @@ def append_transcript_links(note_path: Path, results: list[TranscriptResult]) ->
     lines.append("### Transcripts")
     lines.append("")
     for item in results:
-        lines.append(f"- [[z.Ingestion/{item.safe_title}]] — {item.url}")
+        lines.append(f"- [[z.Ingestion/{item.stem}]] — {item.url}")
 
     snippet = "\n".join(lines).strip("\n") + "\n"
     if "### Transcripts" in existing:
         # Avoid duplicating the section: only add bullets that aren't already present.
         updated = existing
         for item in results:
-            bullet = f"- [[z.Ingestion/{item.safe_title}]] — {item.url}"
+            bullet = f"- [[z.Ingestion/{item.stem}]] — {item.url}"
             if bullet not in updated:
                 updated = updated.rstrip("\n") + "\n" + bullet + "\n"
         note_path.write_text(updated, encoding="utf-8")
@@ -103,7 +103,7 @@ def main() -> int:
         results.append(
             TranscriptResult(
                 url=url,
-                safe_title=safe_title,
+                stem=response.get("stem") or safe_title,
                 transcript_path=response.get("path", ""),
                 transcript_source=response.get("source", ""),
             )

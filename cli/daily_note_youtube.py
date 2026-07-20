@@ -19,7 +19,13 @@ import sys
 import time
 
 from archive_youtube import fetch_youtube_metadata
-from export_transcripts import DEFAULT_OUTPUT_DIR, ensure_daily_note_link, extract_youtube_id, sanitize_title
+from export_transcripts import (
+    DEFAULT_OUTPUT_DIR,
+    ensure_daily_note_link,
+    extract_youtube_id,
+    sanitize_title,
+    youtube_ingest_stem,
+)
 from transcript_server import TranscriptService
 
 YOUTUBE_URL_RE = re.compile(
@@ -234,8 +240,8 @@ def main() -> int:
             metadata = fetch_youtube_metadata(video_id)
             safe_title = sanitize_title(metadata["title"])
             # Both possible destinations (prefix depends on transcript source)
-            destination_starred = output_dir / f"*{safe_title}.md"
-            destination_plain = output_dir / f"{safe_title}.md"
+            destination_starred = output_dir / f"{youtube_ingest_stem(safe_title, transcript_source='YouTube captions')}.md"
+            destination_plain = output_dir / f"{youtube_ingest_stem(safe_title, transcript_source='transcript.lol')}.md"
             existing_destination = next(
                 (d for d in (destination_starred, destination_plain) if d in seen_destinations or d.exists()),
                 None,

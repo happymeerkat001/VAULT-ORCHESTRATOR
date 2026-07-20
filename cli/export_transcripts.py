@@ -118,6 +118,18 @@ def sanitize_title(title: str) -> str:
     return cleaned or "untitled"
 
 
+def youtube_ingest_stem(
+    title: str,
+    *,
+    transcript_source: str,
+    ingested_on: date | None = None,
+) -> str:
+    """Return the canonical YYYYMMDD-prefixed stem for a new YouTube note."""
+    day = ingested_on or date.today()
+    fallback_marker = "" if transcript_source == "transcript.lol" else "*"
+    return f"{day:%Y%m%d} {fallback_marker}{sanitize_title(title)}"
+
+
 def coalesce_string(recording: dict, *keys: str) -> str:
     for key in keys:
         value = recording.get(key)
@@ -362,7 +374,7 @@ def parse_daily_note_links(daily_note_path: Path) -> list[str]:
     content = read_text_with_retry(daily_note_path)
     stems: list[str] = []
     seen: set[str] = set()
-    pattern = re.compile(r'\[\[z\.Ingestion/(\*[^\]]+)\]\]')
+    pattern = re.compile(r'\[\[z\.Ingestion/([^\]]+)\]\]')
     for line in content.splitlines():
         for stem in pattern.findall(line):
             cleaned = stem.strip()
@@ -495,29 +507,50 @@ def main() -> None:
         title = coalesce_string(recording, "title", "name") or f"recording-{recording_id or 'unknown'}"
         status = extract_status(recording)
         safe_title = sanitize_title(title)
-        destination = output_dir / f"{safe_title}.md"
+        source_url = coalesce_string(recording, "sourceUrl", "url")
+        is_youtube = coalesce_string(recording, "source").upper() == "YOUTUBE" or bool(
+            extract_youtube_id(source_url)
+        )
+        candidate_stems = (
+            (
+                youtube_ingest_stem(title, transcript_source="YouTube captions"),
+                youtube_ingest_stem(title, transcript_source="transcript.lol"),
+            )
+            if is_youtube
+            else (safe_title,)
+        )
+        existing_destination = next(
+            (output_dir / f"{stem}.md" for stem in candidate_stems if (output_dir / f"{stem}.md").exists()),
+            None,
+        )
 
         if not is_exportable_status(status):
             skipped_incomplete += 1
             print(f"[export] skip incomplete status={status} title={title}")
             continue
 
-        if destination.exists():
+        if existing_destination:
             skipped_existing += 1
-            print(f"[export] skip existing {destination.name}")
+            print(f"[export] skip existing {existing_destination.name}")
             continue
 
         exportable += 1
         if args.dry_run:
-            print(f"[export] would export {destination.name}")
+            print(f"[export] would export {candidate_stems[0]}.md")
             continue
 
         transcript_text, transcript_source = get_transcript_text(client, recording)
+        output_stem = (
+            youtube_ingest_stem(title, transcript_source=transcript_source)
+            if is_youtube
+            else safe_title
+        )
+        destination = output_dir / f"{output_stem}.md"
         destination.write_text(
             build_markdown(recording, transcript_text, transcript_source),
             encoding="utf-8",
         )
-        ensure_daily_note_link(daily_note_path, safe_title, title)
+        ensure_daily_note_link(daily_note_path, output_stem, title)
         written += 1
         print(f"[export] wrote {destination} source={transcript_source}")
 

@@ -25,6 +25,7 @@ from export_transcripts import (
     extract_youtube_id,
     fetch_youtube_transcript,
     sanitize_title,
+    youtube_ingest_stem,
 )
 from media_captions import fetch_vimeo_captions
 from transcribe import (
@@ -175,8 +176,14 @@ class TranscriptService:
                     transcript_text = "_Transcript unavailable (Transcript.lol media import failed)._"
                     transcript_source = "unavailable"
 
-        stem_prefix = "" if transcript_source == "transcript.lol" else "*"
-        safe_stem = f"{stem_prefix}{safe_title}"
+        if source == "YOUTUBE":
+            safe_stem = youtube_ingest_stem(
+                default_title,
+                transcript_source=transcript_source,
+            )
+        else:
+            stem_prefix = "" if transcript_source == "transcript.lol" else "*"
+            safe_stem = f"{stem_prefix}{safe_title}"
         destination = self.output_dir / f"{safe_stem}.md"
 
         metadata = {
