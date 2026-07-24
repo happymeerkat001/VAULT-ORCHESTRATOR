@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import sys
@@ -45,7 +46,7 @@ except ImportError:
     _HAS_ZONEINFO = False
 
 VAULT_ROOT = Path(
-    "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/AI-Vault"
+    os.environ.get("AI_VAULT_PATH", "~/Obsidian Vaults/AI-Vault")
 ).expanduser()
 HERMES_OUTPUT = VAULT_ROOT / "Hermes Output"
 DAILY_NOTES_PATH = VAULT_ROOT / "Daily Notes"

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from datetime import date
 from pathlib import Path
 import subprocess
@@ -17,7 +18,7 @@ from ingest.daily_note_helpers import ensure_daily_note_preamble, read_text_with
 
 BRIEFING_HEADER = "## Morning Briefing ☀️"
 VAULT_PATH = Path(
-    "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/AI-Vault"
+    os.environ.get("AI_VAULT_PATH", "~/Obsidian Vaults/AI-Vault")
 ).expanduser()
 DAILY_NOTES_PATH = VAULT_PATH / "Daily Notes"
 

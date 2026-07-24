@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 from datetime import date, timedelta
 import json
+import os
 import re
 import subprocess
 import sys
@@ -22,9 +23,11 @@ from pathlib import Path
 
 from transcribe import API_BASE_URL, TERMINAL_STATUSES, TranscriptClient, extract_status, load_env
 
-DEFAULT_OUTPUT_DIR = Path(
-    "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/AI-Vault/z.Ingestion"
-).expanduser()
+DEFAULT_OUTPUT_DIR = (
+    Path(os.environ.get("AI_VAULT_PATH", "~/Obsidian Vaults/AI-Vault"))
+    .expanduser()
+    / "z.Ingestion"
+)
 EXPORTABLE_STATUSES = TERMINAL_STATUSES | {
     "TRANSCRIPTION_COMPLETE",
     "TRANSCRIPT_COMPLETE",

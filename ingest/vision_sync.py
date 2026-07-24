@@ -19,6 +19,7 @@ No external dependencies — stdlib only.
 import base64
 import json
 import mimetypes
+import os
 import sys
 import urllib.error
 import urllib.request
@@ -26,7 +27,7 @@ from pathlib import Path
 
 CREDENTIALS_PATH = Path("~/.config/anthropic/credentials").expanduser()
 VAULT_ROOT = Path(
-    "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/AI-Vault"
+    os.environ.get("AI_VAULT_PATH", "~/Obsidian Vaults/AI-Vault")
 ).expanduser()
 SCANS_DIR = VAULT_ROOT / "Attachments/Scans"
 MODEL = "claude-3-5-sonnet-20241022"

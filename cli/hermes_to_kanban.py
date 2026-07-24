@@ -55,7 +55,7 @@ _ensure_ssl_works()
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ENV_PATH = REPO_ROOT / ".env"
 VAULT_PATH = Path(
-    "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/AI-Vault"
+    os.environ.get("AI_VAULT_PATH", "~/Obsidian Vaults/AI-Vault")
 ).expanduser()
 DAILY_NOTES_PATH = VAULT_PATH / "Daily Notes"
 HERMES_HEADER = "## Hermes-to-do 🪶"

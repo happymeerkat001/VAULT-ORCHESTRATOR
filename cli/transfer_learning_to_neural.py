@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import sys
 
@@ -10,7 +11,7 @@ SOURCE_ROOT = Path(
     "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Learning Root"
 ).expanduser()
 TARGET_ROOT = Path(
-    "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/AI-Vault"
+    os.environ.get("AI_VAULT_PATH", "~/Obsidian Vaults/AI-Vault")
 ).expanduser()
 
 # Parse keywords from terminal arguments

@@ -207,7 +207,7 @@ Write into a specific vault ingestion folder:
 
 ```sh
 python3 cli/export_transcripts.py \
-  --output-dir "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/AI-Vault/z.Ingestion"
+  --output-dir "~/Obsidian Vaults/AI-Vault/z.Ingestion"
 ```
 
 Backfill transcript notes linked from daily notes in an inclusive date range. This re-runs the full `TranscriptService` pipeline for linked YouTube notes so missing or low-quality summaries can be overwritten with fresh Transcript.lol output:
@@ -215,7 +215,7 @@ Backfill transcript notes linked from daily notes in an inclusive date range. Th
 ```sh
 python3 cli/export_transcripts.py \
   --from 2026-06-13 --to 2026-06-15 \
-  --output-dir "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/AI-Vault/z.Ingestion"
+  --output-dir "~/Obsidian Vaults/AI-Vault/z.Ingestion"
 ```
 
 Preview the backfill without writing files:
@@ -223,7 +223,7 @@ Preview the backfill without writing files:
 ```sh
 python3 cli/export_transcripts.py \
   --from 2026-06-13 --to 2026-06-15 \
-  --output-dir "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/AI-Vault/z.Ingestion" \
+  --output-dir "~/Obsidian Vaults/AI-Vault/z.Ingestion" \
   --dry-run
 ```
 
@@ -276,7 +276,7 @@ Append links into an existing note at the same time:
 
 ```sh
 python3 cli/transcript.py \
-  --append-links-to-note "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/AI-Vault/AI Research Log.md" \
+  --append-links-to-note "~/Obsidian Vaults/AI-Vault/AI Research Log.md" \
   "https://www.youtube.com/watch?v=VIDEO_ID" \
   "https://vimeo.com/76979871"
 ```
@@ -349,7 +349,7 @@ Preview a week's proposals without writing anything:
 
 ```sh
 python3 ingest/weekly_housekeep_propose.py --date 2026-07-04 --propose-only \
-  --vault /Users/leon/Library/Mobile\ Documents/iCloud~md~obsidian/Documents/AI-Vault
+  --vault "/Users/leon/Obsidian Vaults/AI-Vault"
 ```
 
 Write the proposal file plus the Saturday Daily Note addendum (idempotent — see below):
@@ -429,4 +429,4 @@ Opens a browser, captures the OAuth2 redirect on localhost, and writes updated t
 
 Default vault root used by transcript export:
 
-`~/Library/Mobile Documents/iCloud~md~obsidian/Documents/AI-Vault/`
+`~/Obsidian Vaults/AI-Vault/` (override with `AI_VAULT_PATH`)

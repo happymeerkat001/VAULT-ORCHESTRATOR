@@ -148,7 +148,7 @@ Every ingest script uses these idioms — match them when adding new sources:
 
 - **`append_to_note(path, content)`** — idempotent append to a daily note. Always paired with a dedup check.
 - **`get_existing_titles(note_path)`** — reads the note, extracts `### Title` headings via regex, prevents duplicate sections.
-- **iCloud retry**: 5× loop with 1s delay on `OSError` (EDEADLK) when writing to iCloud paths under launchd.
+- **Filesystem retry**: 5× loop with 1s delay on `OSError` (EDEADLK) when writing under launchd.
 - **Timezone filtering**: `zoneinfo.ZoneInfo` with UTC fallback for Python < 3.9 compatibility.
 - **Keyword linking**: `KEYWORD_MAP` in `ingest/hedy_common.py` auto-inserts Obsidian wikilinks (e.g. `Python` → `[[Python]]`). Extend it there.
 
@@ -176,15 +176,15 @@ Preflight syntax check runs every 5 minutes via macOS LaunchAgent:
 - Logs: `~/.claude/logs/preflight.{out,err,log}.log`
 - Failure (any `.py` in `cli/`, `ingest/`, or `scripts/` fails to compile) → non-zero exit, captured in `preflight.err.log`. Re-run `python3 cli/preflight.py` from the repo root to see the full traceback.
 
-Scripts must tolerate `EDEADLK` from iCloud file locks (see retry pattern above).
+Scripts must tolerate transient `EDEADLK` file locks (see retry pattern above).
 
 ## Obsidian vault path
 
 ```
-~/Library/Mobile Documents/iCloud~md~obsidian/Documents/AI-Vault/
+~/Obsidian Vaults/AI-Vault/
 ```
 
-Use `AI-Vault` consistently. Daily notes: `Daily Notes/YYYY-MM-DD.md`. Ingestion archive: `z.Ingestion/`. Processed source notes move to `processed/`.
+Set `AI_VAULT_PATH` to override the default. Daily notes: `Daily Notes/YYYY-MM-DD.md`. Ingestion archive: `z.Ingestion/`. Processed source notes move to `processed/`.
 
 ## Token minimization
 

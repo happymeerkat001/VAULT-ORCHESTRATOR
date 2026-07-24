@@ -13,7 +13,7 @@ Forbidden: delete, update, patch, send, modify — on any external API (Gmail, C
 ```
 ingest/     Raw API fetchers. One file per data source. Returns structured dicts.
 process/    Local formatting, filtering, and parsing. No LLM calls here.
-deliver/    Writes final markdown to Obsidian vault via iCloud path.
+deliver/    Writes final markdown to the configured Obsidian vault path.
 cli/        One-shot trigger scripts for manual runs.
 ```
 
@@ -36,7 +36,7 @@ All secrets live in `~/.config/` as JSON files, chmod 600, never committed.
 
 ## Obsidian vault root
 
-`~/Library/Mobile Documents/iCloud~md~obsidian/Documents/AI-Vault/`
+`~/Obsidian Vaults/AI-Vault/` by default, or `$AI_VAULT_PATH` when set.
 
 ## Scripts
 
