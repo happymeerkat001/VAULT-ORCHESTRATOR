@@ -24,7 +24,7 @@ scripts/    Vault cleanup and post-processing helpers.
 | Script | Source | Output |
 |--------|--------|--------|
 | `ingest/briefing_sync.py` | Google Calendar + Gmail + MiniMax | Creates or updates `Daily Notes/YYYY-MM-DD.md` |
-| `ingest/hedy_sync.py` | Hedy AI sessions API | Writes recaps + action items to `Hedy-AI/YYYY-MM-DD.md` |
+| `ingest/hedy_sync.py` | Hedy AI sessions API | Writes recaps + action items to `z.Ingestion/Hedy-AI/YYYY-MM-DD.md` |
 | `ingest/mymemo_sync.py` | MyMemo AI API | Appends podcast digests to `Daily Notes/YYYY-MM-DD.md` |
 | `ingest/vision_sync.py` | Claude Vision API | OCR images from vault, uploads to Imgur |
 | `ingest/weekly_housekeep_propose.py` | Local markdown scan | PR-style proposals in `Hermes Output/` + Daily Note addendum (never mutates notes by itself) |
@@ -171,8 +171,8 @@ That command:
 
 - Authenticates against `https://api.hedy.bot/sessions` using `HEDY_AI_API_KEY` from `.env`
 - Fetches the 10 most recent sessions for single-date syncs, or 100 sessions for range syncs
-- Writes formatted recaps + to-dos into `Hedy-AI/YYYY-MM-DD.md`
-- Extracts transcripts into `Hedy-AI/transcript YYYY-MM-DD.md`
+- Writes formatted recaps + to-dos into `z.Ingestion/Hedy-AI/YYYY-MM-DD.md`
+- Extracts transcripts into `z.Ingestion/Hedy-AI/transcript YYYY-MM-DD.md`
 - Auto-links keywords to vault pages via `KEYWORD_MAP`
 - Skips sessions already present (idempotent)
 

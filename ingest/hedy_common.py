@@ -6,7 +6,7 @@ VAULT_PATH = Path(
     os.environ.get("AI_VAULT_PATH", "~/Obsidian Vaults/AI-Vault")
 ).expanduser()
 DAILY_NOTES_PATH = VAULT_PATH / "Daily Notes"
-HEDY_AI_PATH = VAULT_PATH / "Hedy-AI"
+HEDY_AI_PATH = VAULT_PATH / "z.Ingestion" / "Hedy-AI"
 
 SECTION_HEADER = "## Hedy AI"
 SESSION_PREFIX = "### "
