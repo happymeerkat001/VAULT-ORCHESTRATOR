@@ -24,6 +24,8 @@ from export_transcripts import (
     ensure_daily_note_link,
     extract_youtube_id,
     fetch_youtube_transcript,
+    has_rendered_ai_summary,
+    resolve_youtube_marker,
     sanitize_title,
     youtube_ingest_stem,
 )
@@ -186,7 +188,7 @@ def build_archive_markdown(
             ]
         )
 
-    if ai_summary_text:
+    if has_rendered_ai_summary(description, ai_summary_text):
         sections.extend(
             [
                 "## AI Summary",
@@ -302,10 +304,11 @@ def main() -> None:
             processed_path = unique_processed_path(processed_dir, source_file.name)
             archive_date = metadata["upload_date"] or date.today().isoformat()
 
-            # Check both possible destinations before we know the transcript source
-            candidate_stems = (
-                youtube_ingest_stem(safe_title, transcript_source="YouTube captions"),
-                youtube_ingest_stem(safe_title, transcript_source="transcript.lol"),
+            # Full ingestion can produce a summary, captions-only fallback, or
+            # Transcript.lol-only marker; recognize all existing variants.
+            candidate_stems = tuple(
+                youtube_ingest_stem(safe_title, marker=marker)
+                for marker in ("", "*", "Txnlol F-YT Only ")
             )
             existing_destination = next(
                 (output_dir / f"{stem}.md" for stem in candidate_stems if (output_dir / f"{stem}.md").exists()),
@@ -356,7 +359,10 @@ def main() -> None:
 
             prefixed_stem = youtube_ingest_stem(
                 safe_title,
-                transcript_source=transcript_source,
+                marker=resolve_youtube_marker(
+                    mode="full",
+                    has_ai_summary=has_rendered_ai_summary(metadata["description"], ai_summary),
+                ),
             )
             destination = output_dir / f"{prefixed_stem}.md"
 

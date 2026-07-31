@@ -4,15 +4,15 @@ hedy_sync.py — Fetches today's Hedy AI sessions and appends them to the
 Obsidian daily note as structured Markdown.
 
 One-time setup:
-  Add HEDY_AI_API_KEY to /Users/leon/Documents/Code/vault-orchestrator/.env
+  Add HEDY_AI_API_KEY to /Users/leon/Documents/Code/Obsidian-vault-orchestrator/.env
   or set hedy_api_key in ~/.config/vault-orchestrator/google_credentials
 
 Manual run:
-  python3 /Users/leon/Documents/Code/vault-orchestrator/ingest/hedy_sync.py
+  python3 /Users/leon/Documents/Code/Obsidian-vault-orchestrator/ingest/hedy_sync.py
 
 Crontab (11:45 PM daily):
   mkdir -p /Users/leon/Library/Logs
-  45 23 * * * /usr/bin/python3 /Users/leon/Documents/Code/vault-orchestrator/ingest/hedy_sync.py >> /Users/leon/Library/Logs/hedy_sync.log 2>&1
+  45 23 * * * /usr/bin/python3 /Users/leon/Documents/Code/Obsidian-vault-orchestrator/ingest/hedy_sync.py >> /Users/leon/Library/Logs/hedy_sync.log 2>&1
 
 No external dependencies — stdlib only.
 """

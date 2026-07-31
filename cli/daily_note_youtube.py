@@ -239,11 +239,14 @@ def main() -> int:
 
             metadata = fetch_youtube_metadata(video_id)
             safe_title = sanitize_title(metadata["title"])
-            # Both possible destinations (prefix depends on transcript source)
-            destination_starred = output_dir / f"{youtube_ingest_stem(safe_title, transcript_source='YouTube captions')}.md"
-            destination_plain = output_dir / f"{youtube_ingest_stem(safe_title, transcript_source='transcript.lol')}.md"
+            # Full ingestion may have an AI summary, use captions-only fallback,
+            # or retain the Transcript.lol-only marker.
+            candidate_destinations = tuple(
+                output_dir / f"{youtube_ingest_stem(safe_title, marker=marker)}.md"
+                for marker in ("", "*", "Txnlol F-YT Only ")
+            )
             existing_destination = next(
-                (d for d in (destination_starred, destination_plain) if d in seen_destinations or d.exists()),
+                (d for d in candidate_destinations if d in seen_destinations or d.exists()),
                 None,
             )
 

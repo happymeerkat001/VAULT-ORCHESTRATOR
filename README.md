@@ -97,7 +97,7 @@ Four LaunchAgents run automatically on macOS:
 | Plist | Trigger | Runs |
 |-------|---------|------|
 | `com.leon.briefing.daily` | 5:47 AM + every 30 min + at load | `run-briefing.sh` → `python3 cli/daily_briefing_catchup.py` (no-op before 05:45 or once briefing exists; reauth via `cli/google_reauth.py` if needed) |
-| `com.ang.yt-archive` | Vault file change + every 60s | `run_archive.sh` → `archive_youtube.py` + `daily_note_youtube.py` + `scrape_notes.py` |
+| `com.ang.yt-archive` | Vault file change + every 60s | `run_archive.sh` → `archive_youtube.py` + `daily_note_youtube.py` + `scrape_notes.py` + `inbox_youtube.py` |
 | `com.leon.process-ingest` | Vault file change + every 30s | `scripts/process_ingest.py --apply` |
 | `com.leon.transcript-server` | Always-on (KeepAlive) | `cli/transcript_server.py` on port 8765 |
 
@@ -281,7 +281,16 @@ python3 cli/transcript.py \
   "https://vimeo.com/76979871"
 ```
 
-### 3. Process iPhone-shared daily notes with bare YouTube URLs
+### 3. Process iPhone-shared Inbox notes with bare YouTube URLs
+
+Obsidian Mobile's Share Sheet Location should target `Inbox/` with **Note Content: Link**. `cli/inbox_youtube.py` routes bare YouTube URLs in each Inbox note through `TranscriptService`, writes a titled transcript to `z.Ingestion/`, appends its link to today's daily note, and moves URL-only source notes to `processed/`. If the note has extra content, the URL is removed and the remaining content stays in `Inbox/`.
+
+```sh
+python3 cli/inbox_youtube.py --dry-run
+python3 cli/inbox_youtube.py
+```
+
+### 4. Process legacy iPhone-shared daily notes with bare YouTube URLs
 
 If Obsidian creates a root-level `YYYY-MM-DD.md` containing bare YouTube URLs, `cli/scrape_notes.py` now routes each URL through `TranscriptService`, writes proper `*Title.md` files into `z.Ingestion/`, removes the URL lines from the date-ingest content, and skips the date-ingest file entirely when the note was only YouTube URLs.
 
@@ -297,7 +306,7 @@ Run the ingest for any root-level `YYYY-MM-DD.md`, including older backfill date
 python3 cli/scrape_notes.py
 ```
 
-### 4. Reprocess old YouTube stub files
+### 5. Reprocess old YouTube stub files
 
 If older `z.Ingestion/*.md` files contain only bare YouTube URLs, reprocess them into normal titled transcript notes:
 
@@ -320,6 +329,7 @@ That runs in order:
 1. `archive_youtube.py` — bare YouTube URLs from `Untitled*.md` / `New Note*.md` → `z.Ingestion/`
 2. `daily_note_youtube.py` — bare YouTube URLs from `Daily Notes/YYYY-MM-DD.md` → `z.Ingestion/`
 3. `scrape_notes.py` — bare YouTube URLs from root `YYYY-MM-DD.md` (iPhone share flow) → `z.Ingestion/`
+4. `inbox_youtube.py` — bare YouTube URLs from `Inbox/*.md` (Obsidian Mobile Share Sheet Location) → `z.Ingestion/`
 
 The `com.ang.yt-archive` LaunchAgent runs this automatically whenever the vault root changes.
 

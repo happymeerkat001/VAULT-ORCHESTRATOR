@@ -24,6 +24,8 @@ from export_transcripts import (
     ensure_daily_note_link,
     extract_youtube_id,
     fetch_youtube_transcript,
+    has_rendered_ai_summary,
+    resolve_youtube_marker,
     sanitize_title,
     youtube_ingest_stem,
 )
@@ -176,13 +178,17 @@ class TranscriptService:
                     transcript_text = "_Transcript unavailable (Transcript.lol media import failed)._"
                     transcript_source = "unavailable"
 
+        has_ai_summary = has_rendered_ai_summary(description, ai_summary)
         if source == "YOUTUBE":
             safe_stem = youtube_ingest_stem(
                 default_title,
-                transcript_source=transcript_source,
+                marker=resolve_youtube_marker(
+                    mode=normalized_mode,
+                    has_ai_summary=has_ai_summary,
+                ),
             )
         else:
-            stem_prefix = "" if transcript_source == "transcript.lol" else "*"
+            stem_prefix = resolve_youtube_marker(mode="youtube", has_ai_summary=has_ai_summary)
             safe_stem = f"{stem_prefix}{safe_title}"
         destination = self.output_dir / f"{safe_stem}.md"
 

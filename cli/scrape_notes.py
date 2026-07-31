@@ -17,8 +17,8 @@ And moves the source note into:
   <vault-root>/processed/<original-name>.md (unique if needed)
 
 Manual run:
-  python3 /Users/leon/Documents/Code/vault-orchestrator/cli/scrape_notes.py --dry-run
-  python3 /Users/leon/Documents/Code/vault-orchestrator/cli/scrape_notes.py
+  python3 /Users/leon/Documents/Code/Obsidian-vault-orchestrator/cli/scrape_notes.py --dry-run
+  python3 /Users/leon/Documents/Code/Obsidian-vault-orchestrator/cli/scrape_notes.py
 
 No external dependencies — stdlib only.
 """

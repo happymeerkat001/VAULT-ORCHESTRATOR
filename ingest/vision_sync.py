@@ -11,7 +11,7 @@ One-time setup:
   3. chmod 600 ~/.config/anthropic/credentials
 
 Manual run:
-  python3 /Users/leon/Documents/Code/vault-orchestrator/ingest/vision_sync.py
+  python3 /Users/leon/Documents/Code/Obsidian-vault-orchestrator/ingest/vision_sync.py
 
 No external dependencies — stdlib only.
 """

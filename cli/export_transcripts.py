@@ -3,8 +3,8 @@
 export_transcripts.py - Export completed Transcript.lol recordings into the Obsidian vault.
 
 Manual run:
-  python3 /Users/leon/Documents/Code/vault-orchestrator/cli/export_transcripts.py --dry-run
-  python3 /Users/leon/Documents/Code/vault-orchestrator/cli/export_transcripts.py
+  python3 /Users/leon/Documents/Code/Obsidian-vault-orchestrator/cli/export_transcripts.py --dry-run
+  python3 /Users/leon/Documents/Code/Obsidian-vault-orchestrator/cli/export_transcripts.py
 """
 
 from __future__ import annotations
@@ -32,6 +32,7 @@ EXPORTABLE_STATUSES = TERMINAL_STATUSES | {
     "TRANSCRIPTION_COMPLETE",
     "TRANSCRIPT_COMPLETE",
 }
+MARKER_TXNLOL_ONLY = "Txnlol F-YT Only "
 
 
 def read_text_with_retry(path: Path, attempts: int = 10, delay_s: float = 0.5) -> str:
@@ -124,13 +125,32 @@ def sanitize_title(title: str) -> str:
 def youtube_ingest_stem(
     title: str,
     *,
-    transcript_source: str,
+    marker: str,
     ingested_on: date | None = None,
 ) -> str:
     """Return the canonical YYYYMMDD-prefixed stem for a new YouTube note."""
     day = ingested_on or date.today()
-    fallback_marker = "" if transcript_source == "transcript.lol" else "*"
-    return f"{day:%Y%m%d} {fallback_marker}{sanitize_title(title)}"
+    return f"{day:%Y%m%d} {marker}{sanitize_title(title)}"
+
+
+def resolve_youtube_marker(*, mode: str, has_ai_summary: bool) -> str:
+    """Return the filename marker matching the note's rendered AI Summary state.
+
+    New write paths must update their pre-write dedup checks to recognize every
+    possible marker because the actual summary result is not known until after
+    the transcript pipeline has run.
+    """
+    if mode != "full":
+        return "*"
+    return "" if has_ai_summary else MARKER_TXNLOL_ONLY
+
+
+def has_rendered_ai_summary(description: str, ai_summary: str) -> bool:
+    """Match the condition that controls whether build_markdown renders AI Summary."""
+    description_norm = re.sub(r"\s+", " ", description.strip()).strip().lower()
+    ai_summary_text = ai_summary.strip()
+    ai_summary_norm = re.sub(r"\s+", " ", ai_summary_text).strip().lower()
+    return bool(ai_summary_text and ai_summary_norm != description_norm)
 
 
 def coalesce_string(recording: dict, *keys: str) -> str:
@@ -322,13 +342,11 @@ def build_markdown(
     today_tag = date.today().isoformat()
     description_text = description.strip()
     ai_summary_text = ai_summary.strip()
-    description_norm = re.sub(r"\s+", " ", description_text).strip().lower()
-    ai_summary_norm = re.sub(r"\s+", " ", ai_summary_text).strip().lower()
 
     optional_sections = ""
     if description_text:
         optional_sections += f"## Description\n\n{description_text}\n\n"
-    if ai_summary_text and ai_summary_norm != description_norm:
+    if has_rendered_ai_summary(description_text, ai_summary_text):
         optional_sections += f"## AI Summary\n\n{ai_summary_text}\n\n"
 
     transcript_heading = "## YouTube Transcript" if "youtube" in transcript_source.lower() else "## Transcript"
@@ -515,9 +533,9 @@ def main() -> None:
             extract_youtube_id(source_url)
         )
         candidate_stems = (
-            (
-                youtube_ingest_stem(title, transcript_source="YouTube captions"),
-                youtube_ingest_stem(title, transcript_source="transcript.lol"),
+            tuple(
+                youtube_ingest_stem(title, marker=marker)
+                for marker in ("", "*", MARKER_TXNLOL_ONLY)
             )
             if is_youtube
             else (safe_title,)
@@ -544,7 +562,10 @@ def main() -> None:
 
         transcript_text, transcript_source = get_transcript_text(client, recording)
         output_stem = (
-            youtube_ingest_stem(title, transcript_source=transcript_source)
+            youtube_ingest_stem(
+                title,
+                marker=resolve_youtube_marker(mode="full", has_ai_summary=False),
+            )
             if is_youtube
             else safe_title
         )

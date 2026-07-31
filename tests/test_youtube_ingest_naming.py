@@ -21,24 +21,44 @@ from transcript_server import TranscriptService
 
 
 class YouTubeIngestStemTests(unittest.TestCase):
-    def test_transcript_lol_stem_starts_with_ingestion_date(self):
+    def test_resolve_youtube_marker_keeps_youtube_only_fallback_marker(self):
+        self.assertEqual(
+            export_transcripts.resolve_youtube_marker(mode="youtube", has_ai_summary=False),
+            "*",
+        )
+        self.assertEqual(
+            export_transcripts.resolve_youtube_marker(mode="youtube", has_ai_summary=True),
+            "*",
+        )
+
+    def test_resolve_youtube_marker_uses_summary_presence_for_full_mode(self):
+        self.assertEqual(
+            export_transcripts.resolve_youtube_marker(mode="full", has_ai_summary=True),
+            "",
+        )
+        self.assertEqual(
+            export_transcripts.resolve_youtube_marker(mode="full", has_ai_summary=False),
+            "Txnlol F-YT Only ",
+        )
+
+    def test_unmarked_stem_starts_with_ingestion_date(self):
         self.assertEqual(
             export_transcripts.youtube_ingest_stem(
                 "A Video Title",
-                transcript_source="transcript.lol",
+                marker="",
                 ingested_on=date(2026, 7, 15),
             ),
             "20260715 A Video Title",
         )
 
-    def test_caption_stem_keeps_fallback_marker_after_ingestion_date(self):
+    def test_txnlol_only_stem_uses_named_marker_after_ingestion_date(self):
         self.assertEqual(
             export_transcripts.youtube_ingest_stem(
                 "A Video Title",
-                transcript_source="YouTube captions",
+                marker="Txnlol F-YT Only ",
                 ingested_on=date(2026, 7, 15),
             ),
-            "20260715 *A Video Title",
+            "20260715 Txnlol F-YT Only A Video Title",
         )
 
 
@@ -60,6 +80,79 @@ class TranscriptServiceNamingTests(unittest.TestCase):
             daily_note = output_dir.parent / "Daily Notes" / f"{date.today().isoformat()}.md"
             self.assertIn(f"[[z.Ingestion/{expected_stem}]]", daily_note.read_text(encoding="utf-8"))
 
+    def test_full_youtube_captions_with_ai_summary_write_unmarked_stem(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "z.Ingestion"
+            summary_context = SimpleNamespace(
+                summary="Useful AI summary",
+                client=None,
+                recording_id="recording-1",
+                summary_failure="",
+            )
+            with mock.patch("transcript_server.fetch_youtube_transcript", return_value="caption text"), mock.patch(
+                "transcript_server.prepare_youtube_summary_context", return_value=summary_context
+            ):
+                response = TranscriptService(output_dir).save_from_url(
+                    "https://youtu.be/abc123",
+                    "A Video Title",
+                    description="Video description",
+                    mode="full",
+                )
+
+            expected_stem = f"{date.today():%Y%m%d} A Video Title"
+            self.assertEqual(response["stem"], expected_stem)
+            note = (output_dir / f"{expected_stem}.md").read_text(encoding="utf-8")
+            self.assertIn("## AI Summary\n\nUseful AI summary", note)
+
+    def test_full_youtube_captions_without_ai_summary_write_txnlol_only_stem(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "z.Ingestion"
+            summary_context = SimpleNamespace(
+                summary="",
+                client=None,
+                recording_id="",
+                summary_failure="Transcript.lol unavailable",
+            )
+            with mock.patch("transcript_server.fetch_youtube_transcript", return_value="caption text"), mock.patch(
+                "transcript_server.prepare_youtube_summary_context", return_value=summary_context
+            ):
+                response = TranscriptService(output_dir).save_from_url(
+                    "https://youtu.be/abc123",
+                    "A Video Title",
+                    mode="full",
+                )
+
+            expected_stem = f"{date.today():%Y%m%d} Txnlol F-YT Only A Video Title"
+            self.assertEqual(response["stem"], expected_stem)
+            note = (output_dir / f"{expected_stem}.md").read_text(encoding="utf-8")
+            self.assertIn("caption text", note)
+            self.assertNotIn("_Transcript unavailable", note)
+
+    def test_full_youtube_transcript_lol_fallback_without_summary_writes_txnlol_only_stem(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "z.Ingestion"
+            client = mock.Mock()
+            client.get_transcript.return_value = "Transcript.lol text"
+            summary_context = SimpleNamespace(
+                summary="",
+                client=client,
+                recording_id="recording-1",
+                summary_failure="",
+            )
+            with mock.patch("transcript_server.fetch_youtube_transcript", return_value=None), mock.patch(
+                "transcript_server.prepare_youtube_summary_context", return_value=summary_context
+            ):
+                response = TranscriptService(output_dir).save_from_url(
+                    "https://youtu.be/abc123",
+                    "A Video Title",
+                    mode="full",
+                )
+
+            self.assertEqual(
+                response["stem"],
+                f"{date.today():%Y%m%d} Txnlol F-YT Only A Video Title",
+            )
+
     def test_non_youtube_media_keeps_existing_title_only_filename(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir) / "z.Ingestion"
@@ -75,6 +168,38 @@ class TranscriptServiceNamingTests(unittest.TestCase):
 
 
 class ArchiveYoutubeNamingTests(unittest.TestCase):
+    def test_summary_matching_description_uses_txnlol_only_marker(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            vault_root = Path(tmpdir)
+            output_dir = vault_root / "z.Ingestion"
+            source = vault_root / "Untitled.md"
+            source.write_text("https://youtu.be/abc123\n", encoding="utf-8")
+            args = SimpleNamespace(dry_run=False, vault_root=vault_root, output_dir=output_dir)
+            metadata = {
+                "title": "A Video Title",
+                "description": "Same text",
+                "upload_date": "",
+                "language": "en",
+                "source_url": "https://youtu.be/abc123",
+            }
+            summary_context = SimpleNamespace(
+                summary="  Same  text ", client=None, recording_id=""
+            )
+
+            with mock.patch.object(archive_youtube, "parse_args", return_value=args), mock.patch.object(
+                archive_youtube, "fetch_youtube_metadata", return_value=metadata
+            ), mock.patch.object(
+                archive_youtube, "prepare_youtube_summary_context", return_value=summary_context
+            ), mock.patch.object(archive_youtube, "fetch_youtube_transcript", return_value="caption text"):
+                archive_youtube.main()
+
+            expected_stem = f"{date.today():%Y%m%d} Txnlol F-YT Only A Video Title"
+            self.assertTrue((output_dir / f"{expected_stem}.md").exists())
+            self.assertNotIn(
+                "## AI Summary",
+                (output_dir / f"{expected_stem}.md").read_text(encoding="utf-8"),
+            )
+
     def test_existing_date_prefixed_youtube_note_is_not_rewritten(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             vault_root = Path(tmpdir)
@@ -199,7 +324,7 @@ class ExportTranscriptNamingTests(unittest.TestCase):
             }
             args = SimpleNamespace(dry_run=False, output_dir=output_dir, date_from=None, date_to=None)
             client = mock.Mock()
-            expected_stem = f"{date.today():%Y%m%d} A Video Title"
+            expected_stem = f"{date.today():%Y%m%d} Txnlol F-YT Only A Video Title"
 
             with mock.patch.object(export_transcripts, "parse_args", return_value=args), mock.patch.object(
                 export_transcripts, "load_env", return_value={}

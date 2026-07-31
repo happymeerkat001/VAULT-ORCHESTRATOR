@@ -21,12 +21,13 @@ python3 ingest/mymemo_sync.py
 python3 ingest/vision_sync.py
 
 # Archive pipeline (manual via shell orchestrator)
-bash cli/run_archive.sh              # runs: archive_youtube.py → daily_note_youtube.py → scrape_notes.py
+bash cli/run_archive.sh              # runs: archive_youtube.py → daily_note_youtube.py → scrape_notes.py → inbox_youtube.py
 
 # Individual archive steps (if needed)
 python3 cli/archive_youtube.py          # bare YouTube URLs from Untitled*.md → z.Ingestion/
 python3 cli/daily_note_youtube.py       # bare YouTube URLs from Daily Notes/YYYY-MM-DD.md → z.Ingestion/
 python3 cli/scrape_notes.py             # date-named notes + YouTube URLs + OCR images → z.Ingestion/
+python3 cli/inbox_youtube.py            # bare YouTube URLs from Inbox/*.md → z.Ingestion/
 python3 cli/reprocess_youtube_stubs.py  # URL-only z.Ingestion stubs → normal titled transcript notes
 
 # Hermes-to-do -> GitHub Issues sync

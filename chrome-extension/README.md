@@ -3,7 +3,7 @@
 ## 1) Start local server
 
 ```bash
-python3 /Users/leon/Documents/Code/vault-orchestrator/cli/transcript_server.py
+python3 /Users/leon/Documents/Code/Obsidian-vault-orchestrator/cli/transcript_server.py
 ```
 
 Server listens on `http://localhost:8765`.

@@ -3,11 +3,11 @@
 transcribe.py - Submit a media URL to Transcript.lol and print the transcript.
 
 Manual run:
-  python3 /Users/leon/Documents/Code/vault-orchestrator/cli/transcribe.py \
+  python3 /Users/leon/Documents/Code/Obsidian-vault-orchestrator/cli/transcribe.py \
     "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
 Auth test:
-  python3 /Users/leon/Documents/Code/vault-orchestrator/cli/transcribe.py --test-auth
+  python3 /Users/leon/Documents/Code/Obsidian-vault-orchestrator/cli/transcribe.py --test-auth
 
 Optional env vars in .env or process environment:
   FIREBASE_API_KEY

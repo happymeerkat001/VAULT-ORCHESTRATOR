@@ -4,11 +4,11 @@ hedy_backfill.py — Fetches historical Hedy AI sessions and appends them to
 date-matched Obsidian daily notes as structured Markdown.
 
 One-time setup:
-  Add HEDY_AI_API_KEY to /Users/leon/Documents/Code/vault-orchestrator/.env
+  Add HEDY_AI_API_KEY to /Users/leon/Documents/Code/Obsidian-vault-orchestrator/.env
   or set hedy_api_key in ~/.config/vault-orchestrator/google_credentials
 
 Manual run:
-  python3 /Users/leon/Documents/Code/vault-orchestrator/ingest/hedy_backfill.py
+  python3 /Users/leon/Documents/Code/Obsidian-vault-orchestrator/ingest/hedy_backfill.py
 
 No external dependencies — stdlib only.
 """
