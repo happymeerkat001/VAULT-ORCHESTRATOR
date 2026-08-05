@@ -82,7 +82,14 @@ python3 cli/transfer_learning_to_neural.py --keywords "python" "AI" "LLM"
 python3 cli/google_reauth.py
 ```
 
-No build step, no test suite, no linter — pure stdlib Python 3.9+.
+Core runtime code is stdlib-only Python 3.9+. Tests use the pinned optional
+dependency in `pyproject.toml`:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -e .[test]
+make test
+```
 
 ## Architecture
 
@@ -163,6 +170,9 @@ Every ingest script uses these idioms — match them when adding new sources:
 | `~/.config/anthropic/credentials` | Claude API key (vision_sync only) |
 
 All `~/.config/` files are JSON, chmod 600. `ANTHROPIC_BASE_URL` points to MiniMax's Anthropic-compatible proxy. Transcript.lol auth supports multiple methods: `SPACE_ID + API_KEY` (preferred), `AUTH_TOKEN`, `SESSION_COOKIE`, or login/password flow with `FIREBASE_API_KEY`.
+
+Set optional `HERMES_MODEL` in `.env` to override the worker's default
+`MiniMax-M2.7` model without editing code.
 
 ## Scheduling
 

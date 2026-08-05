@@ -44,6 +44,8 @@ from datetime import datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 ENV_PATH = REPO_ROOT / ".env"
 VAULT_ROOT = Path(
     os.environ.get("AI_VAULT_PATH", "~/Obsidian Vaults/AI-Vault")
@@ -2176,6 +2178,71 @@ def process_one(today: str, env: dict, push_kanban: bool) -> str:
     return "ok: " + output_path
 
 
+# The LaunchAgent continues to invoke this file directly. Runtime subsystems
+# live in hermes/ so they can be unit-tested independently of this entrypoint.
+from hermes import llm as _llm, taskstate as _taskstate, tools as _tools, vaultio as _vaultio
+
+_vaultio.configure(
+    vault_root=VAULT_ROOT,
+    read_attempts=DAILY_NOTE_READ_ATTEMPTS,
+    read_base_delay=DAILY_NOTE_READ_BASE_DELAY,
+    read_max_delay=DAILY_NOTE_READ_MAX_DELAY,
+    write_attempts=DAILY_NOTE_WRITE_ATTEMPTS,
+)
+_tools.configure(
+    vault_root=VAULT_ROOT,
+    web_tool_timeout=WEB_TOOL_TIMEOUT,
+    web_fetch_max_chars=WEB_FETCH_MAX_CHARS,
+)
+_taskstate.configure(
+    daily_notes_path=DAILY_NOTES_PATH,
+    header=HERMES_HEADER,
+    read_daily_note_with_retry=_vaultio._read_daily_note_with_retry,
+    write_daily_note_with_retry=_vaultio._write_daily_note_with_retry,
+    read_attempts=DAILY_NOTE_READ_ATTEMPTS,
+    read_base_delay=DAILY_NOTE_READ_BASE_DELAY,
+    read_max_delay=DAILY_NOTE_READ_MAX_DELAY,
+    write_attempts=DAILY_NOTE_WRITE_ATTEMPTS,
+)
+_llm.configure(minimax_url=MINIMAX_URL, context_char_budget=CONTEXT_CHAR_BUDGET)
+
+# Compatibility aliases preserve imports by ad-hoc callers while ensuring the
+# worker's live code path uses the extracted implementations.
+safe_path = _vaultio.safe_path
+safe_writable_path = _vaultio.safe_writable_path
+_read_text_with_retry = _vaultio._read_text_with_retry
+_write_text_with_retry = _vaultio._write_text_with_retry
+_is_icloud_lock_error = _vaultio._is_icloud_lock_error
+_ensure_icloud_downloaded = _vaultio._ensure_icloud_downloaded
+_read_text_with_iCloud_retry = _vaultio._read_text_with_iCloud_retry
+_preflight_icloud_downloads = _vaultio._preflight_icloud_downloads
+_read_daily_note_with_retry = _vaultio._read_daily_note_with_retry
+_write_daily_note_with_retry = _vaultio._write_daily_note_with_retry
+TOOLS = _tools.TOOLS
+TOOL_DISPATCH = _tools.TOOL_DISPATCH
+find_today_note = _taskstate.find_today_note
+extract_hermes_section = _taskstate.extract_hermes_section
+next_open_item = _taskstate.next_open_item
+_strip_running_suffix = _taskstate._strip_running_suffix
+parse_effort_hint = _taskstate.parse_effort_hint
+extract_absolute_md_paths = _taskstate.extract_absolute_md_paths
+infer_target_note_path = _taskstate.infer_target_note_path
+_normalize_task_signature = _taskstate._normalize_task_signature
+_locate_task_line = _taskstate._locate_task_line
+mark_in_progress = _taskstate.mark_in_progress
+mark_done = _taskstate.mark_done
+mark_open = _taskstate.mark_open
+get_retry_count = _taskstate.get_retry_count
+mark_failed = _taskstate.mark_failed
+annotate_failure = _taskstate.annotate_failure
+_messages_total_chars = _llm._messages_total_chars
+_trim_messages_for_context = _llm._trim_messages_for_context
+call_minimax = _llm.call_minimax
+build_task_breakdown = _llm.build_task_breakdown
+classify_failure = _llm.classify_failure
+suggest_split_subtasks = _llm.suggest_split_subtasks
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--date", help="Date (YYYY-MM-DD). Defaults to today.")
@@ -2194,6 +2261,8 @@ def main() -> int:
         return 0
 
     env = load_env(ENV_PATH)
+    if env.get("HERMES_MODEL"):
+        os.environ["HERMES_MODEL"] = env["HERMES_MODEL"]
     today = args.date or datetime.now().strftime("%Y-%m-%d")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
