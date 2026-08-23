@@ -185,6 +185,12 @@ def remove_succeeded_youtube_urls(content: str, succeeded_urls: set[str]) -> str
         stripped = line.strip()
         if stripped in succeeded_urls and YOUTUBE_URL_RE.fullmatch(stripped):
             continue
+        if (
+            stripped.startswith("![](")
+            and stripped.endswith(")")
+            and stripped[4:-1] in succeeded_urls
+        ):
+            continue
         remaining_lines.append(line)
     return "\n".join(remaining_lines).strip()
 

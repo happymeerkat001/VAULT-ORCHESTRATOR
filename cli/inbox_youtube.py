@@ -4,17 +4,20 @@
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 import sys
 from datetime import date
 from pathlib import Path
 
 from archive_youtube import fetch_youtube_metadata
-from daily_note_youtube import YOUTUBE_URL_RE, is_bare_youtube_url
+from daily_note_youtube import YOUTUBE_URL_RE
 from export_transcripts import (
     DEFAULT_OUTPUT_DIR,
+    build_markdown,
     ensure_daily_note_link,
     extract_youtube_id,
+    resolve_youtube_marker,
     sanitize_title,
     youtube_ingest_stem,
 )
@@ -26,6 +29,11 @@ from scrape_notes import (
     write_text_with_retry,
 )
 from transcript_server import TranscriptService
+
+
+AI_SUMMARY_HEADING_RE = re.compile(r"^#{1,6}\s+AI Summary\s*$", re.IGNORECASE)
+TRANSCRIPT_HEADING_RE = re.compile(r"^#{1,6}\s+(?:YouTube )?Transcript\s*$", re.IGNORECASE)
+MARKDOWN_HEADING_RE = re.compile(r"^#{1,6}\s+\S")
 
 
 def parse_args() -> argparse.Namespace:
@@ -56,13 +64,72 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def is_ingestable_youtube_url(line: str, match: re.Match[str]) -> bool:
+    """Return True if the matched URL should be treated as unprocessed.
+
+    Bare URLs are ingestable, as are URLs embedded as markdown image syntax
+    (``![](url)``) -- the current Obsidian iOS Share Sheet format. A plain
+    markdown link (``[text](url)``) or wikilink (``[[...]]``) around the URL
+    means it is already linked elsewhere (e.g. a prior successful ingest) and
+    should be left alone.
+    """
+    before = line[:match.start()]
+    after = line[match.end():]
+
+    if "[[" in before and "]]" in after:
+        return False
+
+    stripped_before = before.rstrip()
+    if stripped_before.endswith("](") and ")" in after:
+        bracket_start = stripped_before.rfind("[")
+        is_image = bracket_start > 0 and stripped_before[bracket_start - 1] == "!"
+        return is_image
+
+    return True
+
+
 def extract_bare_youtube_urls(content: str) -> list[str]:
     urls: list[str] = []
     for line in content.splitlines():
         for match in YOUTUBE_URL_RE.finditer(line):
-            if is_bare_youtube_url(line, match):
+            if is_ingestable_youtube_url(line, match):
                 urls.append(match.group(0).strip())
     return urls
+
+
+def extract_ai_summary(content: str) -> str:
+    lines = content.splitlines()
+    for idx, line in enumerate(lines):
+        if not AI_SUMMARY_HEADING_RE.match(line.strip()):
+            continue
+        summary_lines: list[str] = []
+        for tail in lines[idx + 1 :]:
+            if MARKDOWN_HEADING_RE.match(tail.strip()):
+                break
+            summary_lines.append(tail)
+        return "\n".join(summary_lines).strip()
+    return ""
+
+
+def extract_local_transcript(content: str) -> str:
+    """Return a pre-extracted transcript already embedded in a shared note.
+
+    The current Obsidian iOS Share Sheet format captures a full transcript
+    under a ``## Transcript`` (or ``## YouTube Transcript``) heading at share
+    time. When present, this is used directly instead of re-fetching via
+    transcript.lol or the YouTube captions API.
+    """
+    lines = content.splitlines()
+    for idx, line in enumerate(lines):
+        if not TRANSCRIPT_HEADING_RE.match(line.strip()):
+            continue
+        transcript_lines: list[str] = []
+        for tail in lines[idx + 1 :]:
+            if MARKDOWN_HEADING_RE.match(tail.strip()):
+                break
+            transcript_lines.append(tail)
+        return "\n".join(transcript_lines).strip()
+    return ""
 
 
 def existing_destination(output_dir: Path, title: str) -> Path | None:
@@ -79,10 +146,15 @@ def main() -> int:
     vault_root = args.vault_root.expanduser()
     output_dir = args.output_dir.expanduser() if args.output_dir else vault_root / "z.Ingestion"
     inbox_dir = vault_root / "Inbox"
+    source_dir = vault_root / "z.Ingestion"
     processed_dir = vault_root / "processed"
-    source_files = sorted(path for path in inbox_dir.glob("*.md") if path.is_file())
+    source_dir_resolved = source_dir.resolve()
+    source_files = sorted(
+        {path for directory in (inbox_dir, source_dir) for path in directory.glob("*.md") if path.is_file()},
+        key=lambda path: str(path),
+    )
 
-    print(f"[inbox-youtube] found {len(source_files)} Inbox note(s) in {inbox_dir}")
+    print(f"[inbox-youtube] found {len(source_files)} source note(s) in {inbox_dir} and {source_dir}")
     if not source_files:
         return 0
 
@@ -111,10 +183,13 @@ def main() -> int:
         urls = extract_bare_youtube_urls(content)
         if not urls:
             continue
+        ai_summary = extract_ai_summary(content)
+        local_transcript = extract_local_transcript(content)
 
         succeeded_urls: set[str] = set()
         failed = False
         daily_note_path = vault_root / "Daily Notes" / f"{date.today().isoformat()}.md"
+        source_is_ingestion = source_path.resolve().parent == source_dir_resolved
         for url in urls:
             try:
                 video_id = extract_youtube_id(url)
@@ -124,7 +199,12 @@ def main() -> int:
                 destination = existing_destination(output_dir, metadata["title"])
 
                 if args.dry_run:
-                    action = "would reingest" if args.force and destination else "would normalize existing" if destination else "would ingest"
+                    if destination and not args.force:
+                        action = "would normalize existing"
+                    elif local_transcript:
+                        action = "would ingest from local transcript"
+                    else:
+                        action = "would ingest via transcript.lol"
                     print(
                         f"[inbox-youtube] {action} {source_path.name}: "
                         f"title={metadata['title']!r} url={url}"
@@ -138,12 +218,32 @@ def main() -> int:
                     print(f"[inbox-youtube] normalized existing {destination.name}")
                     continue
 
+                if local_transcript:
+                    marker = resolve_youtube_marker(
+                        mode="full", has_ai_summary=False, used_transcript_lol=False
+                    )
+                    stem = youtube_ingest_stem(metadata["title"], marker=marker)
+                    note_body = build_markdown(
+                        {"title": metadata["title"], "sourceUrl": url},
+                        local_transcript,
+                        "YouTube Share Sheet",
+                        description=metadata["description"],
+                    )
+                    note_path = output_dir / f"{stem}.md"
+                    write_text_with_retry(note_path, note_body)
+                    ensure_daily_note_link(daily_note_path, stem, metadata["title"])
+                    succeeded_urls.add(url)
+                    written += 1
+                    print(f"[inbox-youtube] wrote {note_path.name} (local transcript)")
+                    continue
+
                 if service is None:
                     service = TranscriptService(output_dir)
                 response = service.save_from_url(
                     url=url,
                     title=metadata["title"],
                     description=metadata["description"],
+                    ai_summary=ai_summary,
                     mode="full",
                     daily_note_path=daily_note_path,
                 )
@@ -165,7 +265,8 @@ def main() -> int:
             continue
 
         updated_content = remove_succeeded_youtube_urls(content, succeeded_urls)
-        if failed or updated_content:
+        should_move_source = source_is_ingestion or not updated_content
+        if failed or updated_content and not should_move_source:
             try:
                 write_text_with_retry(
                     source_path,
@@ -180,6 +281,11 @@ def main() -> int:
             continue
 
         try:
+            if updated_content:
+                write_text_with_retry(
+                    source_path,
+                    f"{updated_content}\n",
+                )
             processed_path = unique_processed_path(processed_dir, source_path.name)
             shutil.move(str(source_path), str(processed_path))
             moved += 1
