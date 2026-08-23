@@ -160,6 +160,7 @@ def build_archive_markdown(
     transcript_source: str,
     source_url: str,
     ai_summary: str = "",
+    ingest_warning: str = "",
 ) -> str:
     title = metadata["title"]
     archive_date = metadata["upload_date"] or date.today().isoformat()
@@ -193,6 +194,14 @@ def build_archive_markdown(
             [
                 "## AI Summary",
                 ai_summary_text,
+                "",
+            ]
+        )
+
+    if ingest_warning.strip():
+        sections.extend(
+            [
+                "> [!WARNING] " + ingest_warning.strip(),
                 "",
             ]
         )
@@ -332,6 +341,7 @@ def main() -> None:
 
             summary_context = None
             ai_summary = ""
+            transcript_warning = ""
             if not args.dry_run:
                 summary_context = prepare_youtube_summary_context(
                     source_url,
@@ -349,11 +359,26 @@ def main() -> None:
                 print(f"[archive] would move {source_file.name} -> processed/{processed_path.name}")
                 continue
 
-            transcript_text = fetch_youtube_transcript(video_id, include_timestamps=True)
-            transcript_source = "YouTube captions"
-            if not transcript_text and summary_context.client and summary_context.recording_id:
-                transcript_text = summary_context.client.get_transcript(summary_context.recording_id, "text")
-                transcript_source = "transcript.lol"
+            transcript_text = ""
+            transcript_source = "transcript.lol"
+            if summary_context.client and summary_context.recording_id:
+                try:
+                    transcript_text = summary_context.client.get_transcript(summary_context.recording_id, "text")
+                except Exception as exc:
+                    transcript_warning = (
+                        "Transcript.lol transcript fetch failed; using YouTube captions fallback: "
+                        f"{exc}"
+                    )
+                    transcript_text = fetch_youtube_transcript(video_id, include_timestamps=True)
+                    if transcript_text:
+                        transcript_source = "YouTube captions"
+            else:
+                transcript_warning = (
+                    "Transcript.lol unavailable; using YouTube captions fallback"
+                )
+                transcript_text = fetch_youtube_transcript(video_id, include_timestamps=True)
+                if transcript_text:
+                    transcript_source = "YouTube captions"
             if not transcript_text:
                 raise RuntimeError("No transcript returned from YouTube captions.")
 
@@ -362,6 +387,7 @@ def main() -> None:
                 marker=resolve_youtube_marker(
                     mode="full",
                     has_ai_summary=has_rendered_ai_summary(metadata["description"], ai_summary),
+                    used_transcript_lol=(transcript_source == "transcript.lol"),
                 ),
             )
             destination = output_dir / f"{prefixed_stem}.md"
@@ -373,6 +399,7 @@ def main() -> None:
                     transcript_source,
                     metadata["source_url"] or source_url,
                     ai_summary=ai_summary,
+                    ingest_warning=transcript_warning,
                 ),
                 encoding="utf-8",
             )

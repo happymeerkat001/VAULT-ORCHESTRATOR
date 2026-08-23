@@ -133,14 +133,16 @@ def youtube_ingest_stem(
     return f"{day:%Y%m%d} {marker}{sanitize_title(title)}"
 
 
-def resolve_youtube_marker(*, mode: str, has_ai_summary: bool) -> str:
-    """Return the filename marker matching the note's rendered AI Summary state.
+def resolve_youtube_marker(*, mode: str, has_ai_summary: bool, used_transcript_lol: bool = True) -> str:
+    """Return the filename marker matching the note's rendered transcript path.
 
     New write paths must update their pre-write dedup checks to recognize every
     possible marker because the actual summary result is not known until after
     the transcript pipeline has run.
     """
     if mode != "full":
+        return "*"
+    if not used_transcript_lol:
         return "*"
     return "" if has_ai_summary else MARKER_TXNLOL_ONLY
 
@@ -311,7 +313,7 @@ def parse_json3_transcript(json3_path: Path, include_timestamps: bool = False) -
     return "\n".join(lines)
 
 
-def get_transcript_text(client: TranscriptClient, recording: dict) -> tuple[str, str]:
+def get_transcript_text(client: TranscriptClient, recording: dict) -> tuple[str, str, str]:
     recording_id = coalesce_string(recording, "id", "recordingId")
     if not recording_id:
         raise RuntimeError(f"Recording missing id: {recording!r}")
@@ -321,11 +323,16 @@ def get_transcript_text(client: TranscriptClient, recording: dict) -> tuple[str,
     if source == "YOUTUBE":
         video_id = extract_youtube_id(source_url)
         if video_id:
-            youtube_text = fetch_youtube_transcript(video_id)
-            if youtube_text:
-                return youtube_text, "YouTube captions"
+            try:
+                return client.get_transcript(recording_id, "text"), "transcript.lol", ""
+            except Exception as exc:
+                youtube_text = fetch_youtube_transcript(video_id)
+                if youtube_text:
+                    warning = f"Transcript.lol transcript fetch failed; using YouTube captions fallback: {exc}"
+                    return youtube_text, "YouTube captions", warning
+                raise exc
 
-    return client.get_transcript(recording_id, "text"), "transcript.lol"
+    return client.get_transcript(recording_id, "text"), "transcript.lol", ""
 
 
 def build_markdown(
@@ -334,6 +341,7 @@ def build_markdown(
     transcript_source: str,
     description: str = "",
     ai_summary: str = "",
+    ingest_warning: str = "",
 ) -> str:
     title = coalesce_string(recording, "title", "name") or "Untitled"
     source_url = coalesce_string(recording, "sourceUrl", "url")
@@ -349,6 +357,10 @@ def build_markdown(
     if has_rendered_ai_summary(description_text, ai_summary_text):
         optional_sections += f"## AI Summary\n\n{ai_summary_text}\n\n"
 
+    warning_text = ""
+    if ingest_warning.strip():
+        warning_text = f"> [!WARNING] {ingest_warning.strip()}\n\n"
+
     transcript_heading = "## YouTube Transcript" if "youtube" in transcript_source.lower() else "## Transcript"
 
     return (
@@ -358,6 +370,7 @@ def build_markdown(
         f"**Language:** {language or 'Unknown'}\n"
         f"**Transcript source:** {transcript_source}\n\n"
         f"{optional_sections}"
+        f"{warning_text}"
         "---\n\n"
         f"{transcript_heading}\n\n"
         f"{transcript_text.rstrip()}\n\n"
@@ -560,18 +573,28 @@ def main() -> None:
             print(f"[export] would export {candidate_stems[0]}.md")
             continue
 
-        transcript_text, transcript_source = get_transcript_text(client, recording)
+        transcript_text, transcript_source, transcript_warning = get_transcript_text(client, recording)
+        used_transcript_lol = transcript_source == "transcript.lol"
         output_stem = (
             youtube_ingest_stem(
                 title,
-                marker=resolve_youtube_marker(mode="full", has_ai_summary=False),
+                marker=resolve_youtube_marker(
+                    mode="full",
+                    has_ai_summary=False,
+                    used_transcript_lol=used_transcript_lol,
+                ),
             )
             if is_youtube
             else safe_title
         )
         destination = output_dir / f"{output_stem}.md"
         destination.write_text(
-            build_markdown(recording, transcript_text, transcript_source),
+            build_markdown(
+                recording,
+                transcript_text,
+                transcript_source,
+                ingest_warning=transcript_warning,
+            ),
             encoding="utf-8",
         )
         ensure_daily_note_link(daily_note_path, output_stem, title)

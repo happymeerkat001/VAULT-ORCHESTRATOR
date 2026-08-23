@@ -113,19 +113,20 @@ class TranscriptService:
 
         transcript_text: str | None = None
         transcript_source = "transcript.lol"
+        transcript_warning = ""
         source = detect_source(cleaned_url)
         summary_context = None
 
         if source == "YOUTUBE":
             video_id = extract_youtube_id(cleaned_url)
             if video_id:
-                transcript_text = fetch_youtube_transcript(video_id)
-                if transcript_text:
-                    transcript_source = "YouTube captions"
-                elif normalized_mode == "youtube":
-                    raise RuntimeError("No YouTube captions available for this video")
-
-                if normalized_mode == "full":
+                if normalized_mode == "youtube":
+                    transcript_text = fetch_youtube_transcript(video_id)
+                    if transcript_text:
+                        transcript_source = "YouTube captions"
+                    else:
+                        raise RuntimeError("No YouTube captions available for this video")
+                else:
                     summary_context = prepare_youtube_summary_context(
                         cleaned_url,
                         default_title,
@@ -142,12 +143,23 @@ class TranscriptService:
                         )
                     elif ai_summary:
                         print("[transcript_server] using YouTube native summary (Transcript.lol unavailable)")
-                    if not transcript_text and summary_context.client and summary_context.recording_id:
-                        try:
-                            transcript_text = summary_context.client.get_transcript(summary_context.recording_id, "text")
-                            transcript_source = "transcript.lol"
-                        except Exception as exc:
-                            print(f"[transcript_server] get_transcript failed (recording may be MEDIA_IMPORT_FAILED): {exc}", file=sys.stderr, flush=True)
+
+                    try:
+                        transcript_text = self._fetch_from_transcript_lol(cleaned_url, default_title, source)
+                        transcript_source = "transcript.lol"
+                    except Exception as exc:
+                        transcript_warning = (
+                            "Transcript.lol transcript fetch failed; using YouTube captions fallback: "
+                            f"{exc}"
+                        )
+                        print(
+                            f"[transcript_server] {transcript_warning}",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                        transcript_text = fetch_youtube_transcript(video_id)
+                        if transcript_text:
+                            transcript_source = "YouTube captions"
         elif source == "VIMEO":
             transcript_text = fetch_vimeo_captions(cleaned_url, "en")
             if transcript_text:
@@ -168,6 +180,7 @@ class TranscriptService:
                     transcript_text = self._fetch_from_transcript_lol(cleaned_url, default_title, source)
                     transcript_source = "transcript.lol"
                 except Exception as exc:
+                    transcript_warning = f"Transcript.lol transcript fetch failed: {exc}"
                     if source == "VIMEO":
                         raise RuntimeError(
                             f"No Vimeo captions found; Transcript.lol media import failed. {exc}"
@@ -179,12 +192,14 @@ class TranscriptService:
                     transcript_source = "unavailable"
 
         has_ai_summary = has_rendered_ai_summary(description, ai_summary)
+        used_transcript_lol = transcript_source == "transcript.lol"
         if source == "YOUTUBE":
             safe_stem = youtube_ingest_stem(
                 default_title,
                 marker=resolve_youtube_marker(
                     mode=normalized_mode,
                     has_ai_summary=has_ai_summary,
+                    used_transcript_lol=used_transcript_lol,
                 ),
             )
         else:
@@ -204,6 +219,7 @@ class TranscriptService:
             transcript_source,
             description=description,
             ai_summary=ai_summary,
+            ingest_warning=transcript_warning,
         )
         if transcript_source == "unavailable" and destination.exists():
             try:
