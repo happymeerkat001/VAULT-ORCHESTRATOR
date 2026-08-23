@@ -20,12 +20,15 @@ URL = "https://youtu.be/abc123"
 METADATA = {"title": "A Shared Video", "description": "Video description"}
 
 
-def make_args(vault_root: Path, *, dry_run: bool = False, force: bool = False) -> SimpleNamespace:
+def make_args(
+    vault_root: Path, *, dry_run: bool = False, force: bool = False, keyword: list[str] | None = None
+) -> SimpleNamespace:
     return SimpleNamespace(
         dry_run=dry_run,
         force=force,
         vault_root=vault_root,
         output_dir=vault_root / "z.Ingestion",
+        keyword=keyword,
     )
 
 
@@ -216,6 +219,35 @@ class InboxYouTubeTests(unittest.TestCase):
                 self.assertEqual(inbox_youtube.main(), 0)
 
             self.assertEqual(source.read_text(encoding="utf-8"), "https://example.com/article\n")
+
+    def test_keyword_filter_only_processes_matching_notes(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            vault_root = Path(tmpdir)
+            matching = vault_root / "z.Ingestion" / "Grok Bot Tutorial.md"
+            other = vault_root / "z.Ingestion" / "Unrelated Video.md"
+            matching.parent.mkdir(parents=True)
+            other_url = "https://youtu.be/other999"
+            matching.write_text(f"{URL}\n", encoding="utf-8")
+            other.write_text(f"{other_url}\n", encoding="utf-8")
+            args = make_args(vault_root, keyword=["grok"])
+
+            def fake_metadata(video_id: str) -> dict:
+                return METADATA if video_id == "abc123" else {"title": "Unrelated Video", "description": ""}
+
+            with mock.patch.object(inbox_youtube, "parse_args", return_value=args), mock.patch.object(
+                inbox_youtube, "fetch_youtube_metadata", side_effect=fake_metadata
+            ), mock.patch.object(
+                inbox_youtube.TranscriptService,
+                "save_from_url",
+                autospec=True,
+                side_effect=lambda service, **kwargs: save_transcript(service.output_dir, **kwargs),
+            ):
+                self.assertEqual(inbox_youtube.main(), 0)
+
+            self.assertFalse(matching.exists())
+            self.assertTrue((vault_root / "processed" / matching.name).exists())
+            self.assertTrue(other.exists())
+            self.assertEqual(other.read_text(encoding="utf-8"), f"{other_url}\n")
 
     def test_duplicate_share_moves_second_source_without_new_transcript(self):
         with tempfile.TemporaryDirectory() as tmpdir:

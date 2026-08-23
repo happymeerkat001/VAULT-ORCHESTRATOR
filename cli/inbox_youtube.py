@@ -61,7 +61,23 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Directory to write transcript markdown files into (default: <vault-root>/z.Ingestion)",
     )
+    parser.add_argument(
+        "--keyword",
+        action="append",
+        default=None,
+        help=(
+            "Only process source notes whose filename contains this keyword "
+            "(case-insensitive). Repeatable; a note matching any keyword is included."
+        ),
+    )
     return parser.parse_args()
+
+
+def matches_keywords(filename: str, keywords: list[str] | None) -> bool:
+    if not keywords:
+        return True
+    lowered = filename.lower()
+    return any(keyword.lower() in lowered for keyword in keywords)
 
 
 def is_ingestable_youtube_url(line: str, match: re.Match[str]) -> bool:
@@ -150,7 +166,12 @@ def main() -> int:
     processed_dir = vault_root / "processed"
     source_dir_resolved = source_dir.resolve()
     source_files = sorted(
-        {path for directory in (inbox_dir, source_dir) for path in directory.glob("*.md") if path.is_file()},
+        {
+            path
+            for directory in (inbox_dir, source_dir)
+            for path in directory.glob("*.md")
+            if path.is_file() and matches_keywords(path.name, args.keyword)
+        },
         key=lambda path: str(path),
     )
 
