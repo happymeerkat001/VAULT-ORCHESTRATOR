@@ -170,6 +170,85 @@ class InboxYouTubeTests(unittest.TestCase):
             self.assertTrue((vault_root / "processed" / source.name).exists())
             self.assertFalse(source.exists())
 
+    def test_already_ingested_output_note_is_not_rescanned(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            vault_root = Path(tmpdir)
+            output_dir = vault_root / "z.Ingestion"
+            output_dir.mkdir(parents=True)
+            # A finished note, already correctly named, that mentions its own
+            # source URL and a companion video URL in prose -- this must never
+            # be treated as a fresh raw share to (re)ingest.
+            finished = output_dir / f"{date.today():%Y%m%d} A Shared Video.md"
+            finished.write_text(
+                f"# A Shared Video\n\n**Source:** {URL}\n\n"
+                "## YouTube Transcript\n\nSee also https://youtu.be/def456 for more.\n",
+                encoding="utf-8",
+            )
+            args = make_args(vault_root)
+
+            with mock.patch.object(inbox_youtube, "parse_args", return_value=args), mock.patch.object(
+                inbox_youtube, "fetch_youtube_metadata"
+            ) as fetch_metadata, mock.patch.object(
+                inbox_youtube.TranscriptService, "save_from_url"
+            ) as save_from_url:
+                self.assertEqual(inbox_youtube.main(), 0)
+
+            fetch_metadata.assert_not_called()
+            save_from_url.assert_not_called()
+            self.assertTrue(finished.exists())
+            self.assertEqual(len(list(output_dir.glob("*.md"))), 1)
+            self.assertFalse((vault_root / "processed").exists())
+
+    def test_secondary_url_in_note_fetches_its_own_transcript(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            vault_root = Path(tmpdir)
+            source = vault_root / "z.Ingestion" / "Shared From iPhone.md"
+            source.parent.mkdir(parents=True)
+            other_url = "https://youtu.be/def456"
+            other_metadata = {"title": "Other Video", "description": "Other description"}
+            source.write_text(
+                f"![]({URL})\n"
+                "\n"
+                "## Transcript\n"
+                "\n"
+                f"Primary video transcript text. See also {other_url} for a companion video.\n",
+                encoding="utf-8",
+            )
+            args = make_args(vault_root)
+
+            def fake_metadata(video_id: str) -> dict:
+                return METADATA if video_id == "abc123" else other_metadata
+
+            with mock.patch.object(inbox_youtube, "parse_args", return_value=args), mock.patch.object(
+                inbox_youtube, "fetch_youtube_metadata", side_effect=fake_metadata
+            ), mock.patch.object(
+                inbox_youtube.TranscriptService,
+                "save_from_url",
+                autospec=True,
+                side_effect=lambda service, **kwargs: save_transcript(service.output_dir, **kwargs),
+            ) as save_from_url:
+                self.assertEqual(inbox_youtube.main(), 0)
+
+            # Primary URL used the local transcript directly (no external fetch).
+            primary_stem = f"{date.today():%Y%m%d} *A Shared Video"
+            primary_note = vault_root / "z.Ingestion" / f"{primary_stem}.md"
+            self.assertTrue(primary_note.exists())
+            self.assertIn("Primary video transcript text.", primary_note.read_text(encoding="utf-8"))
+
+            # Secondary (incidentally-mentioned) URL fetched its own transcript
+            # instead of reusing the primary note's local transcript content.
+            save_from_url.assert_called_once_with(
+                mock.ANY,
+                url=other_url,
+                title="Other Video",
+                description="Other description",
+                ai_summary="",
+                mode="full",
+                daily_note_path=vault_root / "Daily Notes" / f"{date.today().isoformat()}.md",
+            )
+            self.assertTrue((vault_root / "processed" / source.name).exists())
+            self.assertFalse(source.exists())
+
     def test_share_sheet_note_with_empty_transcript_heading_falls_back_to_save_from_url(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             vault_root = Path(tmpdir)

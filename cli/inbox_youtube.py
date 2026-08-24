@@ -34,6 +34,7 @@ from transcript_server import TranscriptService
 AI_SUMMARY_HEADING_RE = re.compile(r"^#{1,6}\s+AI Summary\s*$", re.IGNORECASE)
 TRANSCRIPT_HEADING_RE = re.compile(r"^#{1,6}\s+(?:YouTube )?Transcript\s*$", re.IGNORECASE)
 MARKDOWN_HEADING_RE = re.compile(r"^#{1,6}\s+\S")
+OUTPUT_NOTE_NAME_RE = re.compile(r"^\d{8}\s")
 
 
 def parse_args() -> argparse.Namespace:
@@ -78,6 +79,21 @@ def matches_keywords(filename: str, keywords: list[str] | None) -> bool:
         return True
     lowered = filename.lower()
     return any(keyword.lower() in lowered for keyword in keywords)
+
+
+def is_already_ingested_output_note(filename: str) -> bool:
+    """Return True if filename already matches the YYYYMMDD-prefixed output shape.
+
+    z.Ingestion is both the output directory and (for the current iOS Share
+    Sheet format) a raw-note source directory. A finished note can legitimately
+    contain other youtube.com/youtu.be URLs in its own body (a "**Source:**"
+    line, or a companion video mentioned in the transcript/summary prose).
+    Without this guard, re-scanning z.Ingestion picks those up as if they were
+    fresh, unprocessed shares -- re-ingesting the same note (or, worse, another
+    note's title using this note's transcript) every cycle forever. Raw share
+    notes always arrive titled by the user/app, never with this date prefix.
+    """
+    return bool(OUTPUT_NOTE_NAME_RE.match(filename))
 
 
 def is_ingestable_youtube_url(line: str, match: re.Match[str]) -> bool:
@@ -170,7 +186,9 @@ def main() -> int:
             path
             for directory in (inbox_dir, source_dir)
             for path in directory.glob("*.md")
-            if path.is_file() and matches_keywords(path.name, args.keyword)
+            if path.is_file()
+            and matches_keywords(path.name, args.keyword)
+            and not is_already_ingested_output_note(path.name)
         },
         key=lambda path: str(path),
     )
@@ -211,18 +229,23 @@ def main() -> int:
         failed = False
         daily_note_path = vault_root / "Daily Notes" / f"{date.today().isoformat()}.md"
         source_is_ingestion = source_path.resolve().parent == source_dir_resolved
-        for url in urls:
+        for index, url in enumerate(urls):
             try:
                 video_id = extract_youtube_id(url)
                 if not video_id:
                     raise RuntimeError(f"Invalid YouTube URL: {url}")
                 metadata = fetch_youtube_metadata(video_id)
                 destination = existing_destination(output_dir, metadata["title"])
+                # Only the note's first URL is treated as "this note's own video" for
+                # local-transcript reuse -- any further URLs are typically incidental
+                # mentions (e.g. a companion video linked in the summary/transcript
+                # prose) and must fetch their own transcript, not reuse this one's.
+                use_local_transcript = index == 0 and bool(local_transcript)
 
                 if args.dry_run:
                     if destination and not args.force:
                         action = "would normalize existing"
-                    elif local_transcript:
+                    elif use_local_transcript:
                         action = "would ingest from local transcript"
                     else:
                         action = "would ingest via transcript.lol"
@@ -239,7 +262,7 @@ def main() -> int:
                     print(f"[inbox-youtube] normalized existing {destination.name}")
                     continue
 
-                if local_transcript:
+                if use_local_transcript:
                     marker = resolve_youtube_marker(
                         mode="full", has_ai_summary=False, used_transcript_lol=False
                     )
